@@ -31,3 +31,15 @@ option(
     value : '',
     description : 'Override the USB serial number string; empty keeps the keyboard\'s value, or SMK\'s default when the keyboard sets none.',
 )
+option(
+    'boot',
+    type : 'feature',
+    value : 'enabled',
+    description : 'Build SMK\'s own ISP bootloader for each board whose platform supports it, plus the full-flash image that pairs it with the application.',
+)
+option(
+    'boot_chord',
+    type : 'string',
+    value : 'S,M,K',
+    description : 'Keys that hold the bootloader in ISP mode at power-on. Named without the KC_ prefix and resolved to matrix positions out of each board\'s default layout, so the same chord lands on the right keys on every keyboard.',
+)

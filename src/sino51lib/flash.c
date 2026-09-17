@@ -73,6 +73,11 @@ static void ssp_run(uint8_t flashcon, uint16_t addr, uint8_t op, uint8_t data)
     }
 }
 
+void flash_program_byte(flash_window_t window, uint16_t addr, uint8_t value)
+{
+    ssp_run(FLASHCON_FOR(window), addr, SSP_PROGRAM, value);
+}
+
 void flash_program_from(flash_window_t window, uint16_t addr, const __xdata uint8_t *src, uint8_t len)
 {
     uint8_t flashcon = FLASHCON_FOR(window);

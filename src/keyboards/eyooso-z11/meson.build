@@ -10,6 +10,7 @@ keyboards += {
             'user_sleep.c',
             'kb.c',
         ),
+        'boot_src' : files('user_matrix.c', 'user_init.c'),
         'layouts' : {
             'default' : {
                 'dir' : kb_dir / 'layouts/default',

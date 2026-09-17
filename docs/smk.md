@@ -8,6 +8,7 @@
     - [x] Reserved flash sector
     - [x] EEPROM
 - [x] Sleep
+- [x] ISP bootloader (own, key-chord entry -- see [bootloader.md](bootloader.md))
 - [x] USB HID
     - [x] ISP Command
     - [x] USB Keyboard
