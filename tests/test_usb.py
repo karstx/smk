@@ -23,7 +23,7 @@ SIM = Sim()
 
 # The device-descriptor header is identical across SMK keyboards (only VID/PID,
 # which live further in, differ), so these assertions hold for any built target.
-DEVICE_DESC_HEADER = [0x12, 0x01, 0x10, 0x01, 0x00, 0x00, 0x00, 0x08]
+DEVICE_DESC_HEADER = [0x12, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x08]
 
 
 def setUpModule():
