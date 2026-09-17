@@ -6,9 +6,13 @@
       url = "github:karstx/sinowisp";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    sinodude = {
+      url = "github:carlossless/sinodude";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, utils, sinowisp }:
+  outputs = { self, nixpkgs, utils, sinowisp, sinodude }:
     utils.lib.eachDefaultSystem (
       system:
       let
@@ -86,7 +90,8 @@
             meson
             ninja
 
-            sinowisp.packages."${system}".default # flashing
+            sinowisp.packages."${system}".default # flashing over the device's own ISP bootloader
+            sinodude.packages."${system}".default  # flashing over ICP (the *_full_flash targets)
             clang-tools # for clang-format
 
             ucsim-sh68f90 # patched 8051 simulator (USB vector 7 + SIE model)

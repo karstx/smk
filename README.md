@@ -50,7 +50,9 @@ meson compile -C build nuphy-air60_default_flash # write firmware to the device 
 ```
 
 The same build produces `nuphy-air60_boot.hex` (SMK's ISP bootloader) and
-`nuphy-air60_default_full.hex` (bootloader plus firmware, for a programmer). See
+`nuphy-air60_default_full.hex` (bootloader plus firmware), and
+`nuphy-air60_default_full_flash` writes that over ICP with
+[sinodude](https://github.com/carlossless/sinodude). See
 [docs/bootloader.md](docs/bootloader.md).
 
 ### Debug Console

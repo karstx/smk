@@ -90,6 +90,14 @@ sdar = find_program('sdar', required : true)
 packihx = find_program('packihx', required : true)
 sinowisp = find_program('sinowisp', required : true)
 
+# Only the *_full_flash targets need it -- writing the bootloader means ICP,
+# because neither bootloader will write its own region -- so a tree without it
+# still builds everything.
+sinodude = find_program('sinodude', required : false)
+if not sinodude.found()
+    message('sinodude not found: skipping the *_full_flash targets (ICP writes)')
+endif
+
 # SDCC's -M family is deps-only, so a wrapper writes the depfile ninja needs.
 py = find_program('python3', required : true)
 sdcc_compile = join_paths(meson.current_source_dir(), 'utils/sdcc_compile.py')
@@ -402,7 +410,7 @@ foreach keyboard, board : keyboards
         )
 
         if build_boot
-            custom_target(
+            hex_full = custom_target(
                 '@0@full.hex'.format(prefix),
                 input : [hex_smk, hex_boot],
                 output : '@0@full.hex'.format(prefix),
@@ -419,7 +427,30 @@ foreach keyboard, board : keyboards
                 ],
             )
 
-            message('target available: @0@full.hex'.format(prefix))
+            if sinodude.found() and board.has_key('icp_part')
+                # Writes the whole code flash, stock bootloader included. Code
+                # options are left alone; only ICP can put this image on a board.
+                run_target(
+                    '@0@full_flash'.format(prefix),
+                    command : [
+                        sinodude,
+                        'write',
+                        '--flash',
+                        hex_full.full_path(),
+                        '-c',
+                        'sinodude-serial',
+                        '-p',
+                        board['icp_part'],
+                        '--port',
+                        get_option('icp_port'),
+                    ],
+                    depends : hex_full,
+                )
+
+                message('target available: @0@full.hex, flash: @0@full_flash'.format(prefix))
+            else
+                message('target available: @0@full.hex'.format(prefix))
+            endif
         endif
 
         flash_target_name = '@0@flash'.format(prefix)

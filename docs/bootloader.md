@@ -56,18 +56,30 @@ tools need no changes.
 ## Installing it
 
 The bootloader cannot install itself: it refuses writes to its own region, and
-so does the stock bootloader, so the first one has to go in over the hardware
-programming interface. Build the full-flash image and write it with
-[sinodude](https://github.com/carlossless/sinodude) (or a SinoLink and
-ProWriter):
+so does the stock bootloader, so the first one has to go in over ICP. With an
+Arduino Nano running
+[sinodude-serial](https://github.com/carlossless/sinodude/tree/main/firmware)
+wired to the board:
 
 ```sh
-meson compile -C build nuphy-air60_default_full.hex
+meson compile -C build nuphy-air60_default_full_flash
 ```
 
-That image is the application and the bootloader together, with both reset
-vectors already in place. **Dump your stock flash first** — a full ICP read is
-the only way back to the firmware the board shipped with.
+That builds the application and the bootloader stitched into one image, with
+both reset vectors in place, and writes the whole code flash. The programmer's
+serial port defaults to `/dev/ttyUSB0`:
+
+```sh
+meson configure build -Dicp_port=/dev/cu.usbserial-1420
+```
+
+`meson compile -C build nuphy-air60_default_full.hex` builds the image without
+writing it, for a SinoLink and ProWriter or any other programmer.
+
+Code options are not touched — this writes code flash only, so the board keeps
+the configuration it shipped with. **Dump your stock flash first**: this
+overwrites the stock bootloader, and a full ICP read is the only way back to
+the firmware the board came with.
 
 Afterwards, `sinowisp write` updates the application alone, the way it always
 did.
@@ -103,6 +115,9 @@ off):
 
 - `<board>_boot.hex` — the bootloader alone, for the top of flash
 - `<board>_<layout>_full.hex` — application plus bootloader, for a programmer
+- `<board>_<layout>_full_flash` — writes that image over ICP with sinodude.
+  Needs `icp_part` on the board (the name sinodude programs it as) and
+  `sinodude` on `PATH`; without either, the target is simply absent.
 
 ## Design notes
 
@@ -122,7 +137,7 @@ region takes longer than a host will wait for a status stage.
 
 ## Adding a platform
 
-A platform opts in by adding two entries to its spec in
+A platform opts in by adding three entries to its spec in
 `src/sino51lib/<part>/meson.build`:
 
 - `boot_core` — the sources the bootloader needs from the platform (clock,

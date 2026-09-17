@@ -43,3 +43,9 @@ option(
     value : 'S,M,K',
     description : 'Keys that hold the bootloader in ISP mode at power-on. Named without the KC_ prefix and resolved to matrix positions out of each board\'s default layout, so the same chord lands on the right keys on every keyboard.',
 )
+option(
+    'icp_port',
+    type : 'string',
+    value : '/dev/ttyUSB0',
+    description : 'Serial port of the sinodude-serial programmer, used by the *_full_flash targets that write the stitched bootloader-plus-application image over ICP. On macOS this is a /dev/cu.usbserial-* path.',
+)

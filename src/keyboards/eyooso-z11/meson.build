@@ -4,6 +4,7 @@ keyboards += {
     'eyooso-z11' : {
         'dir' : kb_dir,
         'platform' : 'sh68f90',
+        'icp_part' : 'sh68f90a',  # the part name sinodude programs it as, over ICP
         'src' : files(
             'user_matrix.c',
             'user_init.c',
