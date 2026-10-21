@@ -13,23 +13,23 @@ uint8_t bb_spi_xfer_byte(uint8_t data);
 #define MOT_DRIVE_LOW()                     \
     do {                                    \
         RF_BB_SPI_MOT = 0;                  \
-        GPIO_OUTPUT(0, RF_BB_SPI_MOT_P0_5); \
+        GPIO_OUTPUT(0, RF_BB_SPI_MOT_MASK); \
         RF_BB_SPI_MOT = 0;                  \
     } while (0)
 #define MOT_RELEASE_HIGH()                 \
     do {                                   \
-        GPIO_INPUT(0, RF_BB_SPI_MOT_P0_5); \
+        GPIO_INPUT(0, RF_BB_SPI_MOT_MASK); \
         RF_BB_SPI_MOT = 1;                 \
     } while (0)
 #define CS_DRIVE_LOW()                     \
     do {                                   \
         RF_BB_SPI_CS = 0;                  \
-        GPIO_OUTPUT(7, RF_BB_SPI_CS_P7_4); \
+        GPIO_OUTPUT(7, RF_BB_SPI_CS_MASK); \
         RF_BB_SPI_CS = 0;                  \
     } while (0)
 #define CS_RELEASE_HIGH()                 \
     do {                                  \
-        GPIO_INPUT(7, RF_BB_SPI_CS_P7_4); \
+        GPIO_INPUT(7, RF_BB_SPI_CS_MASK); \
         RF_BB_SPI_CS = 1;                 \
     } while (0)
 
@@ -52,7 +52,7 @@ static void bb_spi_burst(uint8_t *data, int len, bool lock)
     }
     CS_RELEASE_HIGH();
     // Release MOSI to input (pull-up high) after the last bit.
-    GPIO_INPUT(0, RF_BB_SPI_MOSI_P0_7);
+    GPIO_INPUT(0, RF_BB_SPI_MOSI_MASK);
     RF_BB_SPI_MOSI = 1;
     MOT_RELEASE_HIGH();
 }
@@ -89,15 +89,15 @@ uint8_t bb_spi_xfer_byte(uint8_t data)
         recv = recv << 1;
 
         RF_BB_SPI_SCK = 0;
-        GPIO_OUTPUT(4, RF_BB_SPI_SCK_P4_7);
+        GPIO_OUTPUT(4, RF_BB_SPI_SCK_MASK);
         RF_BB_SPI_SCK = 0;
 
         if (data & (1 << 7)) {
-            GPIO_INPUT(0, RF_BB_SPI_MOSI_P0_7); // MOSI -> input, pull-up to high
+            GPIO_INPUT(0, RF_BB_SPI_MOSI_MASK); // MOSI -> input, pull-up to high
             RF_BB_SPI_MOSI = 1;
         } else {
             RF_BB_SPI_MOSI = 0;
-            GPIO_OUTPUT(0, RF_BB_SPI_MOSI_P0_7); // MOSI -> output, drives low
+            GPIO_OUTPUT(0, RF_BB_SPI_MOSI_MASK); // MOSI -> output, drives low
             RF_BB_SPI_MOSI = 0;
         }
 
@@ -105,7 +105,7 @@ uint8_t bb_spi_xfer_byte(uint8_t data)
             recv |= 0x01;
         }
 
-        GPIO_INPUT(4, RF_BB_SPI_SCK_P4_7);
+        GPIO_INPUT(4, RF_BB_SPI_SCK_MASK);
         RF_BB_SPI_SCK = 1;
 
         data = data << 1;
