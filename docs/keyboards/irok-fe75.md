@@ -41,8 +41,9 @@ that channel order. Row 4's LEDs aren't in key order: Z's LED is on common C12.
 
 ## Sleep
 
-- **When:** only in the 2.4G and BT positions, only when no host has the USB link up, after `SLEEP_TIMEOUT` (21000 LED frames, about 3 minutes) without a key change. USB mode never sleeps.
-- **Why the cable rule:** the slider pins aren't INT4 wake sources, so a sleeping board can't notice the slider moving back to USB. With a cable the board is powered from USB anyway, so it stays awake and the slider stays live.
+- **When:** only in the 2.4G and BT positions, only while no USB host is driving the bus, after `SLEEP_TIMEOUT` (21000 LED frames, about 3 minutes) without a key change. USB mode never sleeps.
+- **Why the host rule:** the slider pins aren't INT4 wake sources, so a sleeping board can't notice the slider moving back to USB. A live host's cable is powering us anyway, so staying awake for it costs nothing and keeps the slider live.
+- **"Live host" means SOFs, not `usb_is_configured()`.** Unplugging leaves the chip running on battery, so nothing resets `usb_device_state` and CONFIGURED sticks forever: gating on it meant the board never slept on battery once it had been plugged in. `usb_suspended` (SUSPIF, cleared by any SOF) tracks the host actually driving the bus. Tested on the board: unplugged in 2.4G, the backlight went dark on its own and a key press woke both the keyboard and the host PC.
 - **Wake:** any key. INT4 bits measured on the board: P7.0 = 0, P7.1 = 1, P7.2 = 4, P7.3 = 5, P5.3 = 6, P5.4 = 7, which are exactly the channels `IENC = 0xF3` enables.
 - **Parking:** follows the stock sleep entry at `0x9571`: columns low, P0.0/P0.1, P5.5/P5.6 and P7.7 low with pull-ups off, wireless pins released. P4.1 (RF ACK) is left alone.
 

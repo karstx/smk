@@ -31,14 +31,25 @@ uint16_t      sleep_log_count;
 #    define SLEEP_P7_UNUSED   _P7_7
 #    define SLEEP_MODE_SWITCH (uint8_t)(MODE_SW_A_P5_5 | MODE_SW_B_P5_6)
 
-// Sleep only in the wireless positions, and only on battery. The slider pins
-// aren't INT4 wake sources, so a sleeping board can't notice the slider moving
-// back to USB; staying awake while a host has the USB link up (power comes from
-// the cable then anyway) keeps the slider live. USB mode never sleeps.
+// Sleep only in the wireless positions, and only while no USB host is driving
+// the bus. The slider pins aren't INT4 wake sources, so a sleeping board can't
+// notice the slider moving back to USB; staying awake for a live host (whose
+// cable is powering us anyway) keeps the slider live. USB mode never sleeps.
+//
+// "Live host" has to mean SOFs are still arriving, not usb_is_configured():
+// unplugging the cable leaves the chip running on battery, so nothing resets
+// usb_device_state and CONFIGURED sticks forever. The board then never slept on
+// battery after having once been plugged in. The host stopping (unplugged, or
+// asleep) raises SUSPIF, which usb_suspended tracks and any SOF clears.
+static bool usb_host_driving(void)
+{
+    return usb_is_configured() && !usb_suspended;
+}
+
 user_sleep_mode_t user_sleep_supported(void)
 {
 #    ifdef RF_ENABLED
-    if ((kb_mode_switch == MODE_SW_24G || kb_mode_switch == MODE_SW_BT) && !usb_is_configured()) {
+    if ((kb_mode_switch == MODE_SW_24G || kb_mode_switch == MODE_SW_BT) && !usb_host_driving()) {
         return USER_SLEEP_RF; // after the inactivity timeout
     }
 #    endif
