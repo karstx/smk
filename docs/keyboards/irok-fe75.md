@@ -65,6 +65,8 @@ that channel order. Row 4's LEDs aren't in key order: Z's LED is on common C12.
 | MOT | P0.2 |
 | ACK | P4.1 |
 
+**Key packet byte 9 stays 0.** `kb_init` calls `rf_byte9_set_disable(true)`, so the byte after the five key slots is always 0, as in stock (packet builder at `0x8BB5`). With the NuPhy behaviour (1 in idle packets), the stock 2.4G dongle woke a sleeping Windows 11 PC within ~20 s. Tested on the board: same setup, old build woken by USB after 18 s, fixed build stayed asleep.
+
 ## Default Fn Layer
 
 | Fn + | Action |

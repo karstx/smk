@@ -26,6 +26,16 @@ static bool gui_locked;
 // after main has brought the wireless chip up (rf_init, restore_rf_link).
 mode_switch_t kb_mode_switch = MODE_SW_UNKNOWN;
 
+void kb_init()
+{
+#ifdef RF_ENABLED
+    // Stock's key packet builder (0x8BB5) always writes 0 to byte 9, right
+    // after the five key slots. With the NuPhy's 1 in idle packets, the stock
+    // 2.4G dongle woke a sleeping Windows PC within ~20 s.
+    rf_byte9_set_disable(true);
+#endif
+}
+
 #ifdef RF_ENABLED
 #    define LINK_PAIRING_HOLD_TICKS 60000 // main-loop passes, ~3 s
 static uint16_t link_hold_ticks;
