@@ -681,6 +681,7 @@ void usb_irq_dispatch(void)
                 usb_init();
             } else if (temp_usbif1 & _SETUPIF) {
                 USBIF1 &= ~_SETUPIF;
+                USBIF2 &= ~_IEP0IF;
                 enum_quiet_ticks = ENUM_QUIET_MS;
                 enum_seen        = true;
                 usb_setup_irq();
