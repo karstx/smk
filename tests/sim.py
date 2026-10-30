@@ -178,7 +178,7 @@ def set_report_isp_setup():
 
 class Sim:
     # SH68F90 SFR addresses / bits (see src/sino51lib/sh68f90/sh68f90.h)
-    IE, IEN1, USBADDR, USBIF1, USBIF2, EP0CON = 0xA8, 0xA9, 0x96, 0x92, 0x93, 0x97
+    IE, IEN1, USBADDR, USBIF1, USBIF2, EP0CON, OEP0CNT = 0xA8, 0xA9, 0x96, 0x92, 0x93, 0x97, 0x9E
     SP_SFR = 0x81
     EP0_OUT_BUF = 0x1100
     EA, EUSB, SETUPIF, OEP0IF = 0x80, 0x01, 0x10, 0x10
@@ -333,6 +333,7 @@ class Sim:
         cmds = self._boot_to_post_init() + self._ctrl(set_report_output(length=1)) + [
             # OUT data stage -> usb_ep0_out_irq (LED branch) -> led_state = buf[0]
             self._set_xram(self.EP0_OUT_BUF, [value]),
+            f"set mem sfr 0x{self.OEP0CNT:x} 0x01",
             f"set mem sfr 0x{self.USBIF2:x} 0x{self.OEP0IF:02x}",
             "pc 0x9000",
             f"break 0x{self.SLED_END:x}",
@@ -397,19 +398,20 @@ class Sim:
 
     def trigger_isp_jump(self, confirm=(0x05, 0x75), phase2_break=None, run_task=True):
         """Perform the SET_REPORT(ISP) control transfer that makes the firmware
-        jump into the ISP bootloader: SETUP arms USB_EP0_STATE_ISP, then the OUT
-        data stage carries the confirm bytes that gate the jump. Returns sim
-        output including `info registers`.
+        jump into the ISP bootloader: the SETUP expects an OUT data stage, which
+        carries the confirm bytes that gate the jump. Returns sim output
+        including `info registers`.
 
-        The ISR only records the request, so phase 3 enters usb_task() the way
-        the main loop does and that is where isp_jump() runs. run_task=False
-        stops after the ISR for the negative case, where no jump should happen
-        and the ISR returns to the NOP sled."""
+        The ISR only records the request, once the host has read its status
+        stage, so phase 3 enters usb_task() the way the main loop does and that
+        is where isp_jump() runs. run_task=False stops after the ISR for the
+        negative case, where no jump should happen and the ISR returns to the
+        NOP sled."""
         if phase2_break is None:
             phase2_break = self.SLED_END
         out_data = list(confirm) + [0] * (8 - len(confirm))
         cmds = self._boot_to_post_init() + [
-            # phase 1: SET_REPORT(Feature, ISP) SETUP -> usb_ep0_state = ISP
+            # phase 1: SET_REPORT(Feature, ISP) SETUP -> EP0 waits for the data stage
             self._set_xram(self.EP0_OUT_BUF, set_report_isp_setup()),
             f"set mem sfr 0x{self.USBIF1:x} 0x{self.SETUPIF:02x}",
             f"break 0x{self.SLED_END:x}",
@@ -418,6 +420,7 @@ class Sim:
             # reset PC to the sled top so the ISR return lands back on the sled
             # and reaches the break (rather than sliding past it).
             self._set_xram(self.EP0_OUT_BUF, out_data),
+            f"set mem sfr 0x{self.OEP0CNT:x} 0x{set_report_isp_setup()[6]:02x}",
             f"set mem sfr 0x{self.USBIF2:x} 0x{self.OEP0IF:02x}",
             "pc 0x9000",
             f"break 0x{phase2_break:x}",

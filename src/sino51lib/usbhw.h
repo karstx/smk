@@ -113,6 +113,7 @@ void usb_hw_console_send(const __xdata uint8_t *data, uint8_t len);
         CLEAR_EP0_CNT;     \
         IEP0CNT |= COUNT;  \
     } while (0)
+#define GET_EP0_OUT_CNT() (OEP0CNT & 0x0f)
 
 #define CLEAR_EP1_CNT     \
     do {                  \

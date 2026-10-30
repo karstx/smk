@@ -7,7 +7,7 @@
 
 #define SUSLO_POWERDOWN_KEY 0x55
 #define REGULATOR_SETTLE_US 500
-#define USBIE1_RESUME_ARM   (uint8_t)(_OVERIE | _SETUPIE | _SOFIE | _RESMIE | _SUSPIE | _PBRSTIE)
+#define USBIE1_RESUME_ARM   (uint8_t)(_SETUPIE | _SOFIE | _RESMIE | _SUSPIE | _PBRSTIE)
 
 #define USB_PAGE_ENTER()             \
     uint8_t usb_saved_page = INSCON; \

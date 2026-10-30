@@ -7,7 +7,7 @@
 
 #define SUSLO_POWERDOWN_KEY     0x55
 #define USBIF1_BUS_EVENTS_CLEAR (uint8_t)(_SUSPIF | _SOFIF | _SETUPIF | _OW | _OVERIF)
-#define USBIE1_RESUME_ARM       (uint8_t)(_PBRSTIE | _SUSPIE | _RESMIE | _SOFIE | _SETUPIE | _OVERIE)
+#define USBIE1_RESUME_ARM       (uint8_t)(_PBRSTIE | _SUSPIE | _RESMIE | _SOFIE | _SETUPIE)
 #define REGULATOR_SETTLE_US     500
 
 #define USB_PAGE_ENTER()             \
