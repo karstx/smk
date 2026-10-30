@@ -11,6 +11,7 @@ src_user += files(
     'indicators_render.c',
     'indicators_apply_defaults.c',
     'indicators_validate_settings.c',
+    'indicators_key_event.c',
     'indicators_pwm_enable.c',
     'indicators_pwm_disable.c',
     'user_led_radial.c',

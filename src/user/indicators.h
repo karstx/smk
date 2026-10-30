@@ -15,4 +15,6 @@ void indicators_post_update();
 void indicators_pwm_enable();
 void indicators_pwm_disable();
 void indicators_apply_defaults();
+// every debounced key change, by matrix position (for key-reactive effects)
+void indicators_key_event(uint8_t row, uint8_t col, bool pressed);
 void indicators_validate_settings();

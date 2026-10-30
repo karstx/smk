@@ -9,6 +9,7 @@ typedef int sleep_disabled_placeholder_t;
 #    include "power.h"
 #    include "usb.h"
 #    include "user_sleep.h"
+#    include "kbdef.h"
 #    ifdef RF_ENABLED
 #        include "rf_controller.h"
 #        include "keyboard.h"
@@ -18,7 +19,9 @@ typedef int sleep_disabled_placeholder_t;
 #    include <stdbool.h>
 #    include <stdint.h>
 
-#    define SLEEP_TIMEOUT 21000
+#    ifndef SLEEP_TIMEOUT
+#        define SLEEP_TIMEOUT 21000 // LED frames of inactivity; boards may override in kbdef.h
+#    endif
 
 // `inactivity` is owned by sleep_note_frame(); the main loop only ever reads it
 // indirectly via `sleep_requested`. Activity reaches the tick through the
