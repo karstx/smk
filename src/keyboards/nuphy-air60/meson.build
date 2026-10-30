@@ -4,12 +4,14 @@ keyboards += {
     'nuphy-air60' : {
         'dir' : kb_dir,
         'platform' : 'sh68f90',
+        'icp_part' : 'sh68f90a',  # the part name sinodude programs it as, over ICP
         'src' : files(
             'user_matrix.c',
             'user_init.c',
             'user_sleep.c',
             'kb.c',
         ),
+        'boot_src' : files('user_matrix.c', 'user_init.c'),
         'layouts' : {
             'default' : {
                 'dir' : kb_dir / 'layouts/default',

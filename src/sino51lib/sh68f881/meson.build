@@ -5,6 +5,7 @@ platforms += {
         'example_usbhw' : files('usbhw.c'),
         'example_systick' : files('systick.c'),
         'example_power' : files('power.c', 'extint.c'),
+        'boot_core' : src_flash + files('clock.c', 'peripherals.c'),
         'src' : src_flash + files(
             'clock.c',
             'diag_info.c',
@@ -17,6 +18,8 @@ platforms += {
         'flash_size' : 32768,
         'bootloader_size' : 4096,
         'sector_size' : 1024,
+        'isp_page_size' : 2048,
+        'ea_bit' : 0xaf,
         'xram_size' : 2304,
         'freq_sys' : 12000000,
         'settings_store' : 'eeprom',

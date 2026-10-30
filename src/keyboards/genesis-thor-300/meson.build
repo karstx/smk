@@ -4,12 +4,14 @@ keyboards += {
     'genesis-thor-300' : {
         'dir' : kb_dir,
         'platform' : 'sh68f881',
+        'icp_part' : 'sh68f881',  # the part name sinodude programs it as, over ICP
         'src' : files(
             'user_matrix.c',
             'user_init.c',
             'user_sleep.c',
             'kb.c',
         ),
+        'boot_src' : files('user_matrix.c', 'user_init.c'),
         'layouts' : {
             'default' : {
                 'dir' : kb_dir / 'layouts/default',

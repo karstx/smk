@@ -9,8 +9,8 @@
 #   meson compile -C build nuphy-air60_default_smk.hex
 #   tools/ucsim/sim-get-descriptor.sh build/nuphy-air60_default_smk.hex
 #
-# Expected: "[SIE] EP0 IN[0] 8 bytes: 12 01 10 01 00 00 00 08" -- the start of the
-# device descriptor (bLength=18, DEVICE, bcdUSB 0x0110, bMaxPacketSize0=8).
+# Expected: "[SIE] EP0 IN[0] 8 bytes: 12 01 00 02 00 00 00 08" -- the start of the
+# device descriptor (bLength=18, DEVICE, bcdUSB 0x0200, bMaxPacketSize0=8).
 #
 # Note: this cold-injects after reset, so the firmware's C runtime has not zeroed
 # its __xdata globals and the EP0 state machine is not primed for multi-packet

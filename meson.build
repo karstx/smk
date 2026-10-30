@@ -8,6 +8,7 @@ default_options = {
     'nvm' : 'flash',
     'vendor_id' : '0x258a',
     'product_id' : '0xdead',
+    'boot_stock_scramble' : '0',
 }
 
 dir_base = meson.current_source_dir()
@@ -37,6 +38,20 @@ cc_model_args = [
 ]
 
 cc_base_args = cc_model_args + ['-DSMK_VERSION=@0@'.format(meson.project_version())]
+
+# The bootloader has no ISRs and no reentrancy, and has to fit between the
+# application and its own entry stub, so it trades the application's memory
+# model for the small one.
+cc_model_boot_args = [
+    '--Werror',
+    '--std-c23',
+    '-mmcs51',
+    '--model-small',
+    '--xram-loc',
+    '0x0000',
+    '--opt-code-size',
+    '--out-fmt-ihx',
+]
 
 if get_option('nkro').enabled()
     cc_base_args += '-DNKRO_ENABLE=1'
@@ -76,6 +91,18 @@ sdar = find_program('sdar', required : true)
 packihx = find_program('packihx', required : true)
 sinowisp = find_program('sinowisp', required : true)
 
+# Only the *_full_flash targets need it -- writing the bootloader means ICP,
+# because neither bootloader will write its own region -- so a tree without it
+# still builds everything.
+sinodude = find_program('sinodude', required : false)
+if not sinodude.found()
+    message('sinodude not found: skipping the *_full_flash targets (ICP writes)')
+endif
+icp_args = ['--power', get_option('icp_power')]
+if get_option('icp_programmer') == 'sinodude-serial'
+    icp_args = ['--port', get_option('icp_port')]
+endif
+
 # SDCC's -M family is deps-only, so a wrapper writes the depfile ninja needs.
 py = find_program('python3', required : true)
 sdcc_compile = join_paths(meson.current_source_dir(), 'utils/sdcc_compile.py')
@@ -83,6 +110,15 @@ sdcc_compile = join_paths(meson.current_source_dir(), 'utils/sdcc_compile.py')
 # Fails the build on an unclaimed interrupt vector, or on an ISR-reachable function
 # sharing SDCC's static overlay with a main-loop one (project_sdcc_isr_overlay_collision).
 check_interrupts = files('utils/check_interrupts.py')
+
+# Resolves the bootloader entry chord to matrix positions out of a board's layout,
+# and splices a built bootloader and application into one full-flash image.
+boot_chord_gen = files('utils/boot_chord_gen.py')
+boot_image_gen = files('utils/boot_image.py')
+
+# Fails the build if the linked bootloader does not start where reset lands or
+# put its entry stub where the application's isp_jump() goes.
+boot_check = files('utils/boot_check.py')
 
 # Host-side generator that bakes per-device LED animation geometry into ROM tables
 # (see utils/led_geometry_gen.c). Compiled once with the host compiler at configure
@@ -142,6 +178,141 @@ foreach keyboard, board : keyboards
     else
         # settings live outside the program flash, so code may run up to the marker sector
         platform_cc_args += ['--code-size', '@0@'.format(marker_addr)]
+    endif
+
+    # The bootloader is one image per board rather than per layout: it scans the
+    # matrix, not a keymap, and the chord resolves to the same positions either way.
+    build_boot = get_option('boot').enabled() and spec.has_key('boot_core') and board.has_key('boot_src')
+
+    if build_boot
+        isp_entry_addr = spec['flash_size'] - 0x100
+
+        layout_names = board['layouts'].keys()
+        chord_layout = layout_names.contains('default') ? 'default' : layout_names[0]
+        chord_header = '@0@_boot_chord.h'.format(keyboard)
+
+        configure_file(
+            output : chord_header,
+            command : [py, boot_chord_gen, board['layouts'][chord_layout]['dir'] / 'layout.c', get_option('boot_chord')],
+            capture : true,
+        )
+
+        boot_args = cc_model_boot_args + [
+            '--xram-size',
+            '@0@'.format(spec['xram_size']),
+            '--code-loc',
+            '@0@'.format(bootloader_addr),
+            # keeps the bootloader proper below the ISP entry stub the linker puts at isp_entry_addr
+            '--code-size',
+            '@0@'.format(isp_entry_addr - bootloader_addr),
+            '-DFREQ_SYS=@0@'.format(spec['freq_sys']),
+            '-DWATCHDOG_ENABLE=@0@'.format(options['watchdog_enable']),
+            '-DFLASH_FW_SIZE=@0@'.format(bootloader_addr),
+            '-DFLASH_SECTOR_SIZE=@0@'.format(spec['sector_size']),
+            '-DISP_PAGE_SIZE=@0@'.format(spec['isp_page_size']),
+            '-DXRAM_SIZE=@0@'.format(spec['xram_size']),
+            '-DEA_BIT_ASM=@0@'.format(spec['ea_bit']),
+            '-DKEYBOARD_NAME="@0@"'.format(keyboard),
+            '-DAPP_USB_ID="@0@:@1@"'.format(options['vendor_id'], options['product_id']),
+            '-DBOOT_CHORD_HEADER="@0@"'.format(chord_header),
+            '-DBOOT_STOCK_SCRAMBLE=@0@'.format(options['boot_stock_scramble']),
+        ]
+
+        boot_incs = []
+        foreach dir : inc_base + inc_boot + [spec['dir'], board['dir'], meson.current_build_dir()]
+            boot_incs += '-I' + dir
+        endforeach
+
+        boot_compiler = generator(
+            py,
+            output : '@BASENAME@.rel',
+            depfile : '@BASENAME@.d',
+            arguments : [sdcc_compile, '@DEPFILE@', cc.full_path()] + boot_args + boot_incs + ['-c', '@INPUT@', '-o', '@OUTPUT@'],
+        )
+
+        boot_rel = boot_compiler.process(
+            src_boot + src_startup + src_delay + src_ldo + src_reset + spec['boot_core'] + board['boot_src'],
+        )
+
+        # an archive, so a board that defines a matrix hook itself wins over the default
+        lib_boot_user = custom_target(
+            '@0@_boot_user.lib'.format(keyboard),
+            input : boot_compiler.process(src_user_matrix_defaults),
+            output : '@0@_boot_user.lib'.format(keyboard),
+            command : [sdar, sdar_args, '@OUTPUT@', '@INPUT@'],
+        )
+
+        ihx_boot = custom_target(
+            '@0@_boot.ihx'.format(keyboard),
+            input : boot_rel,
+            output : '@0@_boot.ihx'.format(keyboard),
+            depends : [lib_boot_user],
+            command : [
+                cc,
+                boot_args,
+                '-Wl-bBOOTISP=@0@'.format(isp_entry_addr),
+                '-o',
+                '@OUTPUT@',
+                '@INPUT@',
+                '-l' + lib_boot_user.full_path(),
+            ],
+        )
+
+        # The .hex depends on this, so a misplaced entry stub breaks the build.
+        boot_placement = custom_target(
+            '@0@_boot-check'.format(keyboard),
+            input : ihx_boot,
+            output : '@0@_boot.placement-ok'.format(keyboard),
+            command : [
+                py,
+                boot_check,
+                '--map',
+                meson.current_build_dir() / '@0@_boot.map'.format(keyboard),
+                '--base',
+                '@0@'.format(bootloader_addr),
+                '--entry',
+                '@0@'.format(isp_entry_addr),
+                '--stamp',
+                '@OUTPUT@',
+            ],
+        )
+
+        hex_boot = custom_target(
+            '@0@_boot.hex'.format(keyboard),
+            input : ihx_boot,
+            output : '@0@_boot.hex'.format(keyboard),
+            capture : true,
+            install : true,
+            install_dir : 'firmware',
+            depends : boot_placement,
+            command : [packihx, '@INPUT@'],
+        )
+
+        if sinodude.found() and board.has_key('icp_part')
+            # Reset at 0x0000 must already jump to the bootloader, as the stock one lays it out.
+            run_target(
+                '@0@_boot_flash'.format(keyboard),
+                command : [
+                    sinodude,
+                    'write',
+                    '--flash',
+                    hex_boot.full_path(),
+                    '-c',
+                    get_option('icp_programmer'),
+                    '-p',
+                    board['icp_part'],
+                    '--start_addr',
+                    '@0@'.format(bootloader_addr),
+                    '--end_addr',
+                    '@0@'.format(spec['flash_size']),
+                ] + icp_args,
+                depends : hex_boot,
+            )
+
+            message('target available: @0@_boot.hex, flash: @0@_boot_flash'.format(keyboard))
+        else
+            message('target available: @0@_boot.hex'.format(keyboard))
+        endif
     endif
 
     foreach layout, variant : board['layouts']
@@ -268,10 +439,53 @@ foreach keyboard, board : keyboards
             command : [packihx, '@INPUT@'],
         )
 
+        if build_boot
+            hex_full = custom_target(
+                '@0@full.hex'.format(prefix),
+                input : [hex_smk, hex_boot],
+                output : '@0@full.hex'.format(prefix),
+                capture : true,
+                install : true,
+                install_dir : 'firmware',
+                command : [
+                    py,
+                    boot_image_gen,
+                    '@INPUT0@',
+                    '@INPUT1@',
+                    '@0@'.format(spec['flash_size']),
+                    '@0@'.format(spec['bootloader_size']),
+                ],
+            )
+
+            if sinodude.found() and board.has_key('icp_part')
+                # Writes the whole code flash, stock bootloader included. Code
+                # options are left alone; only ICP can put this image on a board.
+                run_target(
+                    '@0@full_flash'.format(prefix),
+                    command : [
+                        sinodude,
+                        'write',
+                        '--flash',
+                        hex_full.full_path(),
+                        '-c',
+                        get_option('icp_programmer'),
+                        '-p',
+                        board['icp_part'],
+                    ] + icp_args,
+                    depends : hex_full,
+                )
+
+                message('target available: @0@full.hex, flash: @0@full_flash'.format(prefix))
+            else
+                message('target available: @0@full.hex'.format(prefix))
+            endif
+        endif
+
         flash_target_name = '@0@flash'.format(prefix)
         run_target(
             flash_target_name,
-            command : [sinowisp, 'write', '-d', keyboard, '--force', hex_smk.full_path()],  # TODO: try to remove the need for --force
+            # SMK's bootloader reboots on request on every board, including those whose stock one could not
+            command : [sinowisp, 'write', '-d', keyboard, '--reboot', 'true', '--force', hex_smk.full_path()],  # TODO: try to remove the need for --force
             depends : hex_smk,
         )
 
