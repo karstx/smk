@@ -63,16 +63,15 @@ void    rf_wake_nudge();
 void    rf_fetch_4();
 uint8_t checksum(uint8_t *data, int len);
 
+#define RF_POWER_UP_MS 1530
+
 void rf_init()
 {
     uint8_t status_bytes[2];
 
-    delay_ms(255);
-    delay_ms(255);
-    delay_ms(255);
-    delay_ms(255);
-    delay_ms(255);
-    delay_ms(255);
+    for (uint16_t waited = 0; waited < RF_POWER_UP_MS && !rf_get_status(status_bytes); waited += 5) {
+        delay_ms(5);
+    }
 
     for (uint8_t tries = 10; tries > 0; tries--) {
         rf_wake_nudge();
