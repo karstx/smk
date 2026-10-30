@@ -74,9 +74,3 @@ cargo run --release --manifest-path tools/smk-console/Cargo.toml -- 258a:0016  #
 ```
 
 It picks devices up and drops them as they are plugged and unplugged, so it can be left running across a reflash. On Linux the `/dev/hidraw*` node needs a udev rule, or `sudo`.
-
-## Acknowledgements
-
-* [libfx2](https://github.com/whitequark/libfx2)
-* [LUFA](https://github.com/abcminiuser/lufa)
-* [QMK](https://github.com/qmk/qmk_firmware)
