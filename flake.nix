@@ -90,8 +90,8 @@
             meson
             ninja
 
-            sinowisp.packages."${system}".default # flashing over the device's own ISP bootloader
-            sinodude.packages."${system}".default  # flashing over ICP (the *_full_flash targets)
+            sinowisp.packages."${system}".default # flashing over USB ISP
+            sinodude.packages."${system}".default # flashing over ICP (the *_boot_flash and *_full_flash targets)
             clang-tools # for clang-format
 
             ucsim-sh68f90 # patched 8051 simulator (USB vector 7 + SIE model)
