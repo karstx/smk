@@ -70,3 +70,14 @@ sino51lib_examples = [
         'args' : [],
     },
 ]
+
+# Built by the bootloader loop rather than the one above: a bootloader is linked
+# at the top of flash, around the ISP entry stub, not at 0x0000.
+sino51lib_boot_examples = [
+    {
+        'name' : 'boot_minimal',
+        'parts' : ['sh68f90', 'sh68f89', 'sh68f881'],
+        'src' : files('boot_minimal/entry.c'),
+        'args' : [],
+    },
+]

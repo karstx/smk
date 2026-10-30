@@ -149,6 +149,175 @@ lib_user = custom_target(
     command : [sdar, sdar_args, '@OUTPUT@', '@INPUT@'],
 )
 
+# Every bootloader for a part is laid out the same way; what differs per image
+# is its identity and the sources behind its entry hook.
+boot_platforms = {}
+foreach name, spec : platforms
+    if spec.has_key('boot_core')
+        base = spec['flash_size'] - spec['bootloader_size']
+        entry = spec['flash_size'] - 0x100
+        boot_platforms += {
+            name : {
+                'base' : base,
+                'entry' : entry,
+                'args' : cc_model_boot_args + [
+                    '--xram-size',
+                    '@0@'.format(spec['xram_size']),
+                    '--code-loc',
+                    '@0@'.format(base),
+                    # keeps the bootloader proper below the ISP entry stub the linker puts at entry
+                    '--code-size',
+                    '@0@'.format(entry - base),
+                    '-DFREQ_SYS=@0@'.format(spec['freq_sys']),
+                    '-DFLASH_FW_SIZE=@0@'.format(base),
+                    '-DFLASH_SECTOR_SIZE=@0@'.format(spec['sector_size']),
+                    '-DISP_PAGE_SIZE=@0@'.format(spec['isp_page_size']),
+                    '-DXRAM_SIZE=@0@'.format(spec['xram_size']),
+                    '-DEA_BIT_ASM=@0@'.format(spec['ea_bit']),
+                ],
+            },
+        }
+    endif
+endforeach
+
+boot_images = []
+
+# The bootloader is one image per board rather than per layout: it scans the
+# matrix, not a keymap, and the chord resolves to the same positions either way.
+foreach keyboard, board : keyboards
+    options = default_options + board['options']
+    platform = board['platform']
+
+    if not (get_option('boot').enabled() and boot_platforms.has_key(platform) and board.has_key('boot_src'))
+        continue
+    endif
+
+    layout_names = board['layouts'].keys()
+    chord_layout = layout_names.contains('default') ? 'default' : layout_names[0]
+    chord_header = '@0@_boot_chord.h'.format(keyboard)
+
+    configure_file(
+        output : chord_header,
+        command : [py, boot_chord_gen, board['layouts'][chord_layout]['dir'] / 'layout.c', get_option('boot_chord')],
+        capture : true,
+    )
+
+    boot_images += {
+        'name' : keyboard,
+        'platform' : platform,
+        'src' : src_boot_smk + board['boot_src'],
+        # an archive, so a board that defines a matrix hook itself wins over the default
+        'lib_src' : src_user_matrix_defaults,
+        'incs' : inc_base + inc_boot + [platforms[platform]['dir'], board['dir'], meson.current_build_dir()],
+        'args' : [
+            '-DWATCHDOG_ENABLE=@0@'.format(options['watchdog_enable']),
+            '-DBOOT_USB_MANUFACTURER="SMK"',
+            '-DBOOT_USB_PRODUCT="SMK ISP Bootloader (@0@)"'.format(keyboard),
+            '-DBOOT_USB_SERIAL="@0@:@1@"'.format(options['vendor_id'], options['product_id']),
+            '-DBOOT_CHORD_HEADER="@0@"'.format(chord_header),
+            '-DBOOT_STOCK_SCRAMBLE=@0@'.format(options['boot_stock_scramble']),
+        ],
+        'install' : true,
+    }
+endforeach
+
+foreach example : sino51lib_boot_examples
+    foreach platform : example['parts']
+        boot_images += {
+            'name' : 'ex-@0@-@1@'.format(example['name'], platform),
+            'platform' : platform,
+            'src' : example['src'],
+            'incs' : [dir_base / 'src/sino51lib', platforms[platform]['dir']] + inc_boot,
+            'args' : ['-DWATCHDOG_ENABLE=1'] + example['args'],
+            'install' : false,
+            'example' : true,
+        }
+    endforeach
+endforeach
+
+boot_hexes = {}
+boot_example_hexes = []
+
+foreach image : boot_images
+    name = image['name']
+    layout = boot_platforms[image['platform']]
+    spec = platforms[image['platform']]
+    boot_args = layout['args'] + image['args']
+
+    boot_incs = []
+    foreach dir : image['incs']
+        boot_incs += '-I' + dir
+    endforeach
+
+    boot_compiler = generator(
+        py,
+        output : '@BASENAME@.rel',
+        depfile : '@BASENAME@.d',
+        arguments : [sdcc_compile, '@DEPFILE@', cc.full_path()] + boot_args + boot_incs + ['-c', '@INPUT@', '-o', '@OUTPUT@'],
+    )
+
+    boot_rel = boot_compiler.process(
+        src_boot + src_startup + src_delay + src_ldo + src_reset + spec['boot_core'] + image['src'],
+    )
+
+    link_libs = []
+    link_depends = []
+    if image.has_key('lib_src')
+        boot_lib = custom_target(
+            '@0@_boot_user.lib'.format(name),
+            input : boot_compiler.process(image['lib_src']),
+            output : '@0@_boot_user.lib'.format(name),
+            command : [sdar, sdar_args, '@OUTPUT@', '@INPUT@'],
+        )
+        link_libs += '-l' + boot_lib.full_path()
+        link_depends += boot_lib
+    endif
+
+    ihx_boot = custom_target(
+        '@0@_boot.ihx'.format(name),
+        input : boot_rel,
+        output : '@0@_boot.ihx'.format(name),
+        depends : link_depends,
+        command : [cc, boot_args, '-Wl-bBOOTISP=@0@'.format(layout['entry']), '-o', '@OUTPUT@', '@INPUT@'] + link_libs,
+    )
+
+    # The .hex depends on this, so a misplaced entry stub breaks the build.
+    boot_placement = custom_target(
+        '@0@_boot-check'.format(name),
+        input : ihx_boot,
+        output : '@0@_boot.placement-ok'.format(name),
+        command : [
+            py,
+            boot_check,
+            '--map',
+            meson.current_build_dir() / '@0@_boot.map'.format(name),
+            '--base',
+            '@0@'.format(layout['base']),
+            '--entry',
+            '@0@'.format(layout['entry']),
+            '--stamp',
+            '@OUTPUT@',
+        ],
+    )
+
+    hex_boot = custom_target(
+        '@0@_boot.hex'.format(name),
+        input : ihx_boot,
+        output : '@0@_boot.hex'.format(name),
+        capture : true,
+        install : image['install'],
+        install_dir : 'firmware',
+        depends : boot_placement,
+        command : [packihx, '@INPUT@'],
+    )
+
+    if image.get('example', false)
+        boot_example_hexes += hex_boot
+    else
+        boot_hexes += {name : hex_boot}
+    endif
+endforeach
+
 foreach keyboard, board : keyboards
     platform = board['platform']
     if not platforms.has_key(platform)
@@ -180,113 +349,10 @@ foreach keyboard, board : keyboards
         platform_cc_args += ['--code-size', '@0@'.format(marker_addr)]
     endif
 
-    # The bootloader is one image per board rather than per layout: it scans the
-    # matrix, not a keymap, and the chord resolves to the same positions either way.
-    build_boot = get_option('boot').enabled() and spec.has_key('boot_core') and board.has_key('boot_src')
+    build_boot = boot_hexes.has_key(keyboard)
 
     if build_boot
-        isp_entry_addr = spec['flash_size'] - 0x100
-
-        layout_names = board['layouts'].keys()
-        chord_layout = layout_names.contains('default') ? 'default' : layout_names[0]
-        chord_header = '@0@_boot_chord.h'.format(keyboard)
-
-        configure_file(
-            output : chord_header,
-            command : [py, boot_chord_gen, board['layouts'][chord_layout]['dir'] / 'layout.c', get_option('boot_chord')],
-            capture : true,
-        )
-
-        boot_args = cc_model_boot_args + [
-            '--xram-size',
-            '@0@'.format(spec['xram_size']),
-            '--code-loc',
-            '@0@'.format(bootloader_addr),
-            # keeps the bootloader proper below the ISP entry stub the linker puts at isp_entry_addr
-            '--code-size',
-            '@0@'.format(isp_entry_addr - bootloader_addr),
-            '-DFREQ_SYS=@0@'.format(spec['freq_sys']),
-            '-DWATCHDOG_ENABLE=@0@'.format(options['watchdog_enable']),
-            '-DFLASH_FW_SIZE=@0@'.format(bootloader_addr),
-            '-DFLASH_SECTOR_SIZE=@0@'.format(spec['sector_size']),
-            '-DISP_PAGE_SIZE=@0@'.format(spec['isp_page_size']),
-            '-DXRAM_SIZE=@0@'.format(spec['xram_size']),
-            '-DEA_BIT_ASM=@0@'.format(spec['ea_bit']),
-            '-DKEYBOARD_NAME="@0@"'.format(keyboard),
-            '-DAPP_USB_ID="@0@:@1@"'.format(options['vendor_id'], options['product_id']),
-            '-DBOOT_CHORD_HEADER="@0@"'.format(chord_header),
-            '-DBOOT_STOCK_SCRAMBLE=@0@'.format(options['boot_stock_scramble']),
-        ]
-
-        boot_incs = []
-        foreach dir : inc_base + inc_boot + [spec['dir'], board['dir'], meson.current_build_dir()]
-            boot_incs += '-I' + dir
-        endforeach
-
-        boot_compiler = generator(
-            py,
-            output : '@BASENAME@.rel',
-            depfile : '@BASENAME@.d',
-            arguments : [sdcc_compile, '@DEPFILE@', cc.full_path()] + boot_args + boot_incs + ['-c', '@INPUT@', '-o', '@OUTPUT@'],
-        )
-
-        boot_rel = boot_compiler.process(
-            src_boot + src_startup + src_delay + src_ldo + src_reset + spec['boot_core'] + board['boot_src'],
-        )
-
-        # an archive, so a board that defines a matrix hook itself wins over the default
-        lib_boot_user = custom_target(
-            '@0@_boot_user.lib'.format(keyboard),
-            input : boot_compiler.process(src_user_matrix_defaults),
-            output : '@0@_boot_user.lib'.format(keyboard),
-            command : [sdar, sdar_args, '@OUTPUT@', '@INPUT@'],
-        )
-
-        ihx_boot = custom_target(
-            '@0@_boot.ihx'.format(keyboard),
-            input : boot_rel,
-            output : '@0@_boot.ihx'.format(keyboard),
-            depends : [lib_boot_user],
-            command : [
-                cc,
-                boot_args,
-                '-Wl-bBOOTISP=@0@'.format(isp_entry_addr),
-                '-o',
-                '@OUTPUT@',
-                '@INPUT@',
-                '-l' + lib_boot_user.full_path(),
-            ],
-        )
-
-        # The .hex depends on this, so a misplaced entry stub breaks the build.
-        boot_placement = custom_target(
-            '@0@_boot-check'.format(keyboard),
-            input : ihx_boot,
-            output : '@0@_boot.placement-ok'.format(keyboard),
-            command : [
-                py,
-                boot_check,
-                '--map',
-                meson.current_build_dir() / '@0@_boot.map'.format(keyboard),
-                '--base',
-                '@0@'.format(bootloader_addr),
-                '--entry',
-                '@0@'.format(isp_entry_addr),
-                '--stamp',
-                '@OUTPUT@',
-            ],
-        )
-
-        hex_boot = custom_target(
-            '@0@_boot.hex'.format(keyboard),
-            input : ihx_boot,
-            output : '@0@_boot.hex'.format(keyboard),
-            capture : true,
-            install : true,
-            install_dir : 'firmware',
-            depends : boot_placement,
-            command : [packihx, '@INPUT@'],
-        )
+        hex_boot = boot_hexes[keyboard]
 
         if sinodude.found() and board.has_key('icp_part')
             # Reset at 0x0000 must already jump to the bootloader, as the stock one lays it out.
@@ -543,7 +609,7 @@ foreach example : sino51lib_examples
     endforeach
 endforeach
 
-alias_target('examples', example_hexes)
+alias_target('examples', example_hexes + boot_example_hexes)
 
 # Simulator-based firmware tests, run in the patched uCsim simulator (flake
 # package ucsim-sh68f90). Discovers every tests/test_*.py so new test files are

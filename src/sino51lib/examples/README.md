@@ -26,8 +26,9 @@ keyboard uses them.
 | `systick_tick` | all | `systick.c`: Timer2 as the periodic tick, both slot lengths |
 | `bb_i2c_probe` | all | the bit-banged I2C master, on two GPIO pins named in `kbdef.h` |
 | `isp_powerdown` | all | `power_enter_powerdown()`, the `extint` wake calls, `isp_jump()` |
+| `boot_minimal` | all | the ISP bootloader in `boot/`, with empty entry hooks; built as `ex-boot_minimal-<part>_boot.hex` at the top of flash |
 
-Each links six to eight modules and comes to under two kilobytes.
+Each application example links six to eight modules and comes to under two kilobytes.
 
 ## Coverage
 

@@ -54,3 +54,13 @@ bool boot_app_enabled(void);
 bool boot_isp_requested(void);
 
 void boot_enter_app(void) __naked;
+
+/*
+ * Supplied by the firmware that builds the bootloader. boot_board_init() runs
+ * once after the clock and peripherals are up, to put the board's pins in a
+ * safe state. boot_entry_held() then decides, on a cold start, whether to stay
+ * in ISP mode rather than run a valid application: a key chord, a jumper, or
+ * just `return false`.
+ */
+void boot_board_init(void);
+bool boot_entry_held(void);

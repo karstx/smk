@@ -161,10 +161,21 @@ static const __code uint8_t config_desc[CONFIG_DESC_LEN] = {
 static const __code uint8_t langid_desc[] = {4, USB_DESC_STRING, 0x09, 0x04};
 // clang-format on
 
+#ifndef BOOT_USB_MANUFACTURER
+#    define BOOT_USB_MANUFACTURER "sino51lib"
+#endif
+#ifndef BOOT_USB_PRODUCT
+#    define BOOT_USB_PRODUCT "ISP Bootloader"
+#endif
+// the application's VID:PID is what tells one board in ISP mode from another, so builds should set it
+#ifndef BOOT_USB_SERIAL
+#    define BOOT_USB_SERIAL ""
+#endif
+
 static const __code char *const __code strings[] = {
-    [USB_STRING_MANUFACTURER - 1]  = "SMK",
-    [USB_STRING_PRODUCT - 1]       = "SMK ISP Bootloader (" KEYBOARD_NAME ")",
-    [USB_STRING_SERIAL_NUMBER - 1] = APP_USB_ID,
+    [USB_STRING_MANUFACTURER - 1]  = BOOT_USB_MANUFACTURER,
+    [USB_STRING_PRODUCT - 1]       = BOOT_USB_PRODUCT,
+    [USB_STRING_SERIAL_NUMBER - 1] = BOOT_USB_SERIAL,
 };
 
 #define SCRATCH_SIZE 96u

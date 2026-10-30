@@ -1,16 +1,10 @@
 #include "boot.h"
-#include "isp.h"
-#include "usb.h"
 #include BOOT_CHORD_HEADER
 #include "kbdef.h"
 #include "user_matrix.h"
 #include "user_init.h"
-#include "clock.h"
-#include "ldo.h"
-#include "peripherals.h"
 #include "delay.h"
 #include "watchdog.h"
-#include "sfr.h"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -57,8 +51,13 @@ static bool chord_down(void)
     return true;
 }
 
+void boot_board_init(void)
+{
+    user_init();
+}
+
 // held, not merely seen: a chord sampled once could be one scan of a key being released
-static bool chord_held(void)
+bool boot_entry_held(void)
 {
     for (uint8_t sample = 0; sample < CHORD_SAMPLES; sample++) {
         watchdog_kick();
@@ -72,41 +71,4 @@ static bool chord_held(void)
     }
 
     return true;
-}
-
-void main(void)
-{
-    // the application can jump here with any SFR page or flash window selected
-#ifdef sfr_page_0
-    sfr_page_0();
-#endif
-    FLASHCON = 0;
-
-    watchdog_kick();
-
-    const bool requested = boot_isp_requested();
-
-    ldo_init();
-    clock_init();
-    peripherals_init();
-
-    user_init();
-
-    // the bootloader polls USB so it never claims a vector; the application owns them all
-    IEN0 = 0;
-    IEN1 = 0;
-
-    if (!requested && !chord_held() && boot_app_enabled()) {
-        boot_enter_app();
-    }
-
-    isp_init();
-    boot_usb_start();
-
-    for (;;) {
-        watchdog_kick();
-
-        boot_usb_poll();
-        isp_task();
-    }
 }

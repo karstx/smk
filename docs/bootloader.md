@@ -169,6 +169,34 @@ keeps kicking the watchdog throughout.
 transfer and run from the main loop, because erasing the whole application
 region takes longer than a host will wait for a status stage.
 
+## Using it outside SMK
+
+The bootloader is part of sino51lib, in `src/sino51lib/boot/`, and nothing in
+it depends on SMK. A firmware supplies two functions, declared in `boot.h`:
+
+- `void boot_board_init(void)` runs once after the clock and peripherals are
+  up. Put the board's pins in a safe state here.
+- `bool boot_entry_held(void)` decides, on a cold start, whether to stay in
+  ISP mode when a valid application is present. SMK scans its key chord here
+  (`src/boot/chord.c`); a board without one can check a jumper, or return
+  `false`.
+
+The bootloader also enters ISP mode when the application jumps to the entry
+stub with the ISP key, and when there is no valid application.
+
+Its USB strings are build parameters: `BOOT_USB_MANUFACTURER`,
+`BOOT_USB_PRODUCT` and `BOOT_USB_SERIAL`. Set the serial to the application's
+VID:PID, because every board in ISP mode enumerates as `0603:1020` and the
+serial is what tells them apart. `BOOT_STOCK_SCRAMBLE` turns on the page data
+offsets described above.
+
+`src/sino51lib/examples/boot_minimal` is a bootloader with empty hooks, built
+for every supported part by `meson compile -C build examples`. The top-level
+`meson.build` shows the full recipe: compile with the part's `boot_core`, link
+at `flash_size - bootloader_size` with `--code-size` stopping short of the
+entry stub, place the `BOOTISP` area at `flash_size - 0x100`, and check the
+result with `utils/boot_check.py`.
+
 ## Adding a platform
 
 A platform opts in by adding three entries to its spec in
@@ -179,8 +207,8 @@ A platform opts in by adding three entries to its spec in
 - `isp_page_size` and `ea_bit` — the page size the protocol uses, and the bit
   address of `EA` for the entry stub
 
-A board opts in with `boot_src` in its own `meson.build`, listing the files the
-bootloader needs from it — its matrix and its GPIO setup.
+An SMK board opts in with `boot_src` in its own `meson.build`, listing the
+files the chord scan needs from it: its matrix and its GPIO setup.
 
 The SH68F90, SH68F89 and SH68F881 are wired up. On parts with SFR paging,
 `usb.c` selects page 1 around its USB register accesses and `ssp_run` selects
