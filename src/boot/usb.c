@@ -26,6 +26,20 @@
 #define BOOT_USB_VID 0x0603u
 #define BOOT_USB_PID 0x1020u
 
+#ifdef sfr_page_1
+#    define USB_PAGE_ENTER()         \
+        uint8_t saved_page = INSCON; \
+        sfr_page_1()
+#    define USB_PAGE_LEAVE() INSCON = saved_page
+#else
+#    define USB_PAGE_ENTER()
+#    define USB_PAGE_LEAVE()
+#endif
+
+#ifndef _SOFIA
+#    define _SOFIA _SOFIE
+#endif
+
 #define EP1_PACKET_SIZE 8u
 #define EP1_INTERVAL_MS 10u
 
@@ -41,6 +55,7 @@ typedef enum {
     EP0_IN_DATA,
     EP0_OUT_DATA,
     EP0_STATUS_OUT,
+    EP0_STATUS_IN,
 } ep0_state_t;
 
 typedef enum {
@@ -172,6 +187,8 @@ static ep0_state_t  ep0_state;
 static ep0_source_t ep0_source;
 static uint16_t     ep0_left;
 static uint16_t     ep0_index;
+static __bit        ep0_fills_wlength;
+static __bit        ep0_in_last;
 
 static const __code uint8_t *ep0_code_src;
 
@@ -191,29 +208,61 @@ static uint8_t ep0_next_byte(void)
     return isp_get_report_byte(index);
 }
 
+static void ep0_stall(void)
+{
+    ep0_state = EP0_IDLE;
+    STALL_EP0();
+    SET_EP0_OUT_RDY;
+}
+
+static void ep0_ack(void)
+{
+    SET_EP0_OUT_RDY;
+    ep0_state = EP0_STATUS_IN;
+    SET_EP0_CNT(0);
+    SET_EP0_IN_RDY;
+}
+
+// arms IN only for a packet the host will read: a zero-length one ends the data stage only short of wLength
 static void ep0_in_step(void)
 {
+    if (ep0_in_last) {
+        ep0_state = EP0_STATUS_OUT;
+        if (ep0_source == EP0_SRC_REPORT) {
+            isp_get_report_end();
+        }
+        return;
+    }
+
     uint8_t chunk = (ep0_left > EP0_BUF_SIZE) ? EP0_BUF_SIZE : (uint8_t)ep0_left;
 
     for (uint8_t i = 0; i < chunk; i++) {
         EP0_IN_BUF[i] = ep0_next_byte();
     }
 
-    ep0_left -= chunk;
     SET_EP0_CNT(chunk);
+    SET_EP0_IN_RDY;
 
-    // a full last packet still needs the zero-length one that ends the data stage
-    ep0_state = (ep0_left == 0 && chunk < EP0_BUF_SIZE) ? EP0_STATUS_OUT : EP0_IN_DATA;
+    ep0_left -= chunk;
+    ep0_in_last = (chunk < EP0_BUF_SIZE) || (ep0_left == 0 && ep0_fills_wlength);
 }
 
 static void ep0_in_begin(ep0_source_t source, uint16_t length)
 {
-    ep0_source = source;
-    ep0_index  = 0;
-    ep0_left   = (req_length < length) ? req_length : length;
+    if (req_length == 0) {
+        ep0_ack();
+        return;
+    }
 
+    ep0_source        = source;
+    ep0_index         = 0;
+    ep0_left          = (req_length < length) ? req_length : length;
+    ep0_fills_wlength = (ep0_left == req_length);
+    ep0_in_last       = 0;
+    ep0_state         = EP0_IN_DATA;
+
+    SET_EP0_OUT_RDY;
     ep0_in_step();
-    SET_EP0_IN_RDY;
 }
 
 static void ep0_in_code(const __code uint8_t *src, uint16_t length)
@@ -225,14 +274,6 @@ static void ep0_in_code(const __code uint8_t *src, uint16_t length)
 static void ep0_in_scratch(uint8_t length)
 {
     ep0_in_begin(EP0_SRC_SCRATCH, length);
-}
-
-static void ep0_status_in(void)
-{
-    ep0_state = EP0_IDLE;
-    ep0_left  = 0;
-    CLEAR_EP0_CNT;
-    SET_EP0_IN_RDY;
 }
 
 static uint8_t string_descriptor(void)
@@ -267,7 +308,7 @@ static void get_descriptor(void)
     } else if (type == USB_DESC_STRING && req_value_lo <= USB_STRING_SERIAL_NUMBER) {
         ep0_in_scratch(string_descriptor());
     } else {
-        STALL_EP0();
+        ep0_stall();
     }
 }
 
@@ -294,7 +335,7 @@ static void standard_request(void)
         } else if (req_request == USB_REQ_GET_INTERFACE) {
             ep0_in_scratch(1);
         } else {
-            STALL_EP0();
+            ep0_stall();
         }
         return;
     }
@@ -303,7 +344,7 @@ static void standard_request(void)
         pending_address = req_value_lo;
     } else if (req_request == USB_REQ_SET_CONFIGURATION) {
         if (req_value_lo > 1u || req_value_hi != 0u) {
-            STALL_EP0();
+            ep0_stall();
             return;
         }
         configuration = req_value_lo;
@@ -316,11 +357,11 @@ static void standard_request(void)
             }
         }
     } else if (req_request != USB_REQ_SET_INTERFACE) {
-        STALL_EP0();
+        ep0_stall();
         return;
     }
 
-    ep0_status_in();
+    ep0_ack();
 }
 
 static void class_request(void)
@@ -329,7 +370,7 @@ static void class_request(void)
 
     // SET_IDLE's wValue is a duration, not a report type, so it is answered first
     if (req_request == USB_HID_REQ_SET_IDLE) {
-        ep0_status_in();
+        ep0_ack();
         return;
     }
 
@@ -350,19 +391,34 @@ static void class_request(void)
         }
     }
 
-    STALL_EP0();
+    ep0_stall();
 }
 
+static void ep0_in_done(void)
+{
+    if (ep0_state == EP0_IN_DATA) {
+        ep0_in_step();
+    } else if (ep0_state == EP0_STATUS_IN) {
+        ep0_state = EP0_IDLE;
+        USBADDR   = pending_address;
+    }
+}
+
+// a SETUP aborts whatever transfer came before it, so a stale IN completion must not count toward the new one
 static void ep0_setup(void)
 {
+    if ((USBIF2 & _IEP0IF) && ep0_state == EP0_STATUS_IN) {
+        ep0_in_done();
+    }
+    USBIF2 &= (uint8_t)~(_IEP0IF | _OEP0IF);
+    ep0_state = EP0_IDLE;
+
     req_type     = EP0_OUT_BUF[0];
     req_request  = EP0_OUT_BUF[1];
     req_value_lo = EP0_OUT_BUF[2];
     req_value_hi = EP0_OUT_BUF[3];
     req_index_lo = EP0_OUT_BUF[4];
     req_length   = (uint16_t)(EP0_OUT_BUF[6] | ((uint16_t)EP0_OUT_BUF[7] << 8));
-
-    ep0_state = EP0_IDLE;
 
     uint8_t type = req_type & USB_TYPE_MASK;
 
@@ -371,44 +427,27 @@ static void ep0_setup(void)
     } else if (type == USB_TYPE_CLASS && (req_type & USB_RECIP_MASK) == USB_RECIP_IFACE) {
         class_request();
     } else {
-        STALL_EP0();
+        ep0_stall();
     }
-}
-
-static void ep0_in_done(void)
-{
-    if (ep0_state == EP0_IN_DATA) {
-        ep0_in_step();
-        SET_EP0_IN_RDY;
-        SET_EP0_OUT_RDY;
-        return;
-    }
-
-    if (ep0_state == EP0_STATUS_OUT) {
-        ep0_state = EP0_IDLE;
-        if (ep0_source == EP0_SRC_REPORT) {
-            isp_get_report_end();
-        }
-        SET_EP0_OUT_RDY;
-        SET_EP0_IN_STALL;
-        return;
-    }
-
-    // status stage of a no-data or OUT transfer; SET_ADDRESS takes effect here
-    SET_EP0_IN_STALL;
-    SET_EP0_OUT_RDY;
-    USBADDR = pending_address;
 }
 
 static void ep0_out_done(void)
 {
     if (ep0_state != EP0_OUT_DATA) {
-        CLEAR_EP0_CNT;
-        SET_EP0_IN_RDY;
+        // the status OUT of an IN transfer, or the host cutting its data stage short
+        if (ep0_state == EP0_IN_DATA || ep0_state == EP0_STATUS_OUT) {
+            ep0_state = EP0_IDLE;
+        }
+        SET_EP0_OUT_RDY;
         return;
     }
 
     uint8_t chunk = (ep0_left > EP0_BUF_SIZE) ? EP0_BUF_SIZE : (uint8_t)ep0_left;
+
+    if (GET_EP0_OUT_CNT() != chunk) {
+        ep0_stall();
+        return;
+    }
 
     for (uint8_t i = 0; i < chunk; i++) {
         isp_set_report_byte(ep0_index++, EP0_OUT_BUF[i]);
@@ -421,17 +460,15 @@ static void ep0_out_done(void)
         return;
     }
 
-    ep0_state = EP0_IDLE;
     isp_set_report_end();
-    CLEAR_EP0_CNT;
-    SET_EP0_IN_RDY;
+    ep0_ack();
 }
 
 // the interrupt-enable bits only shape which events raise a flag; IEN1's EUSB stays clear, so nothing vectors
 static void usb_attach(void)
 {
     USBADDR = 0;
-    USBIE1  = (_OVERIE | _SETUPIE | _SOFIA | _RESMIE | _SUSPIE | _PBRSTIE);
+    USBIE1  = (_SETUPIE | _SOFIA | _RESMIE | _SUSPIE | _PBRSTIE);
     USBIE2  = (_OEP0IE | _IEP0IE);
     USBCON  = (_ENUSB | _SW1CON);
 }
@@ -453,6 +490,8 @@ static void usb_reset(void)
 
 void boot_usb_start(void)
 {
+    USB_PAGE_ENTER();
+
     /*
      * The application may have been enumerated a moment ago (sinowisp reaches
      * the bootloader by asking it to jump here), so drop off the bus long
@@ -462,21 +501,26 @@ void boot_usb_start(void)
     delay_ms(200);
 
     usb_reset();
+
+    USB_PAGE_LEAVE();
 }
 
 void boot_usb_stop(void)
 {
+    USB_PAGE_ENTER();
     usb_detach();
+    USB_PAGE_LEAVE();
 }
 
 // Polled, never an ISR: the bootloader shares 0x0003 upwards with the application's vectors.
 void boot_usb_poll(void)
 {
-    uint8_t if1 = USBIF1;
-    uint8_t if2 = USBIF2;
+    USB_PAGE_ENTER();
 
-    if (if1 & _USBRSTIF) {
-        USBIF1 &= (uint8_t)~_USBRSTIF;
+    uint8_t if1 = USBIF1;
+
+    if (if1 & (_USBRSTIF | _PUPIF)) {
+        USBIF1 &= (uint8_t)~(_USBRSTIF | _PUPIF);
 
         USBCON |= _SWRST;
         // clang-format off
@@ -493,14 +537,21 @@ void boot_usb_poll(void)
 
         usb_reset();
         SET_EP0_OUT_RDY;
+        USB_PAGE_LEAVE();
         return;
     }
 
+    if (if1 & (_SOFIF | _SUSPIF | _RESMIF)) {
+        USBIF1 &= (uint8_t)~(_SOFIF | _SUSPIF | _RESMIF);
+    }
+
     if (if1 & _SETUPIF) {
-        USBIF1 &= (uint8_t)~_SETUPIF;
-        USBIF1 &= (uint8_t)~(_OVERIF | _OW);
+        USBIF1 &= (uint8_t)~(_SETUPIF | _OVERIF | _OW);
         ep0_setup();
     }
+
+    // read after the SETUP, which drops the completions of the transfer it aborts
+    uint8_t if2 = USBIF2;
 
     if (if2 & _OEP0IF) {
         USBIF2 &= (uint8_t)~_OEP0IF;
@@ -512,7 +563,5 @@ void boot_usb_poll(void)
         ep0_in_done();
     }
 
-    if (if1 & (_SOFIF | _SUSPIF | _RESMIF | _PUPIF)) {
-        USBIF1 &= (uint8_t)~(_SOFIF | _SUSPIF | _RESMIF | _PUPIF);
-    }
+    USB_PAGE_LEAVE();
 }

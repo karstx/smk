@@ -17,7 +17,8 @@ from sim import find_sim, load_symbols, read_intel_hex
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 EP0_OUT_BUF = 0x1100
-USBIF1, USBIF2 = 0x92, 0x93
+USBIF1, USBIF2, OEP0CNT = 0x92, 0x93, 0x9E
+IB_CON1, IB_CON5 = 0xF2, 0xF6
 SETUPIF, OEP0IF = 0x10, 0x10
 
 # cells the SH68F90 model reads as the external pin level of P5 / P7 (sh68f90.cc)
@@ -126,6 +127,7 @@ class BootSim:
             f"set mem sfr 0x{USBIF1:x} 0x{SETUPIF:02x}",
             "run",
             self._set_xram(EP0_OUT_BUF, init_read),
+            f"set mem sfr 0x{OEP0CNT:x} 0x{len(init_read):02x}",
             f"set mem sfr 0x{USBIF2:x} 0x{OEP0IF:02x}",
             "run",
             "run",
@@ -133,6 +135,53 @@ class BootSim:
             f"set mem sfr 0x{USBIF1:x} 0x{SETUPIF:02x}",
         ] + self._pump(iterations)
         return self.reassemble(self.run(cmds))
+
+    def _command(self, cmd, addr=0):
+        data = [0x05, cmd, addr & 0xFF, (addr >> 8) & 0xFF, 0x00, 0x00]
+        return [
+            self._set_xram(EP0_OUT_BUF, set_feature_report(0x05, len(data))),
+            f"set mem sfr 0x{USBIF1:x} 0x{SETUPIF:02x}",
+            "run",
+            self._set_xram(EP0_OUT_BUF, data),
+            f"set mem sfr 0x{OEP0CNT:x} 0x{len(data):02x}",
+            f"set mem sfr 0x{USBIF2:x} 0x{OEP0IF:02x}",
+            "run",
+            "run",
+            "run",
+        ]
+
+    def write_page(self, addr, page):
+        """ERASE, INIT_WRITE at `addr`, then one page report fed in 8-byte OUT
+        packets the way a host splits it. Returns the sim output, which ends with
+        a dump of the page in code space and of IB_CON1..IB_CON5."""
+        payload = [0x06, 0x77] + list(page)
+        cmds = self._boot_to_loop() + self._command(0x45) + self._command(0x57, addr) + [
+            self._set_xram(EP0_OUT_BUF, set_feature_report(0x06, len(payload))),
+            f"set mem sfr 0x{USBIF1:x} 0x{SETUPIF:02x}",
+            "run",
+        ]
+        for off in range(0, len(payload), 8):
+            chunk = payload[off:off + 8]
+            cmds += [
+                self._set_xram(EP0_OUT_BUF, chunk),
+                f"set mem sfr 0x{OEP0CNT:x} 0x{len(chunk):02x}",
+                f"set mem sfr 0x{USBIF2:x} 0x{OEP0IF:02x}",
+                "run",
+            ]
+        cmds += ["run", "run",
+                 f"dump rom 0x{addr:x} 0x{addr + len(page) - 1:x}",
+                 f"dump sfr 0x{IB_CON1:x} 0x{IB_CON5:x}"]
+        return self.run(cmds, timeout=600)
+
+    @staticmethod
+    def dumped(output, start, end):
+        """Bytes from `dump` lines covering start..end inclusive."""
+        cells = {}
+        for m in re.finditer(r"^0x([0-9a-f]+)\s+((?:[0-9a-f]{2} )+)", output, re.M):
+            base = int(m.group(1), 16)
+            for i, b in enumerate(m.group(2).split()):
+                cells[base + i] = int(b, 16)
+        return [cells.get(a) for a in range(start, end + 1)]
 
     @staticmethod
     def in_packets(output):

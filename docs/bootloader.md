@@ -2,7 +2,7 @@
 
 A replacement for the ISP bootloader in the top 4 KiB of a SinoWealth 8051
 keyboard's flash. It speaks the same HID protocol the stock one does, so
-[sinowisp](https://github.com/carlossless/sinowisp) drives it unchanged, and it
+[sinowisp](https://github.com/karstx/sinowisp) drives it unchanged, and it
 adds the one thing the stock bootloader has no way to offer: a key chord that
 gets you into ISP mode from a cold start, whatever the firmware above it is
 doing.
@@ -58,7 +58,7 @@ tools need no changes.
 The bootloader cannot install itself: it refuses writes to its own region, and
 so does the stock bootloader, so the first one has to go in over ICP. With an
 Arduino Nano running
-[sinodude-serial](https://github.com/carlossless/sinodude/tree/main/firmware)
+[sinodude-serial](https://github.com/karstx/sinodude/tree/main/firmware)
 wired to the board:
 
 ```sh
@@ -73,8 +73,14 @@ serial port defaults to `/dev/ttyUSB0`:
 meson configure build -Dicp_port=/dev/cu.usbserial-1420
 ```
 
+To write through a SinoLink dongle instead:
+
+```sh
+meson configure build -Dicp_programmer=sinolink
+```
+
 `meson compile -C build nuphy-air60_default_full.hex` builds the image without
-writing it, for a SinoLink and ProWriter or any other programmer.
+writing it, for ProWriter or any other programmer.
 
 Code options are not touched — this writes code flash only, so the board keeps
 the configuration it shipped with. **Dump your stock flash first**: this
@@ -83,6 +89,23 @@ the firmware the board came with.
 
 Afterwards, `sinowisp write` updates the application alone, the way it always
 did.
+
+### Replacing only the bootloader
+
+To swap the stock bootloader for this one and keep the firmware that is on the
+board:
+
+```sh
+meson compile -C build nuphy-air60_boot_flash
+```
+
+This erases and writes the bootloader region alone, so it only works when the
+application below it was written through an ISP bootloader (stock firmware,
+or anything `sinowisp write` put there): `0x0000` has to jump into the
+bootloader and the application's entry has to sit at `firmware_size - 5`, as
+described under [Flash layout](#flash-layout). On a board whose application was
+written over ICP as a plain image, use `_full_flash` instead, or the board
+boots straight into the application and never reaches the bootloader.
 
 ## Flash layout
 
@@ -103,6 +126,17 @@ The application's real reset target is moved to `firmware_size - 5` on the way
 in, and reads of `0x0001`–`0x0002` are answered from there, which is what makes
 a written image read back byte-identical. This is the layout `sinowisp convert`
 calls the JTAG payload.
+
+### Page data offsets
+
+Some stock bootloaders offset the bytes of every page they transfer, and the
+flashing tools apply the inverse for those boards. To keep those tools working
+unchanged, a board can set `boot_stock_scramble` in its options, and the
+bootloader then does the same: it subtracts `0x5A` from each byte it writes,
+and adds `0x5E` to each byte it reads after the first six of a page. The CIY
+X77 has it on, which is what `sinowisp -d ciy-x77` expects. On such a board,
+driving the bootloader with `--platform` and no device preset garbles the
+image; verification catches it before the image is enabled.
 
 Two addresses in that table are an ABI with the application, which is linked
 separately and cannot check them: `utils/boot_check.py` asserts both against
@@ -148,10 +182,9 @@ A platform opts in by adding three entries to its spec in
 A board opts in with `boot_src` in its own `meson.build`, listing the files the
 bootloader needs from it — its matrix and its GPIO setup.
 
-`boot.c`, `isp.c` and `main.c` are platform-independent. `usb.c` is not quite:
-it reaches the USB registers directly, and on the SH68F881 and SH68F89 those
-live on SFR page 1. Only the SH68F90 is wired up today, and only it has been
-tested.
+The SH68F90, SH68F89 and SH68F881 are wired up. On parts with SFR paging,
+`usb.c` selects page 1 around its USB register accesses and `ssp_run` selects
+page 0 for each flash operation, restoring whatever page the caller had.
 
 ## Tests
 

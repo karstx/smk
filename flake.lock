@@ -253,15 +253,15 @@
         "utils": "utils"
       },
       "locked": {
-        "lastModified": 1789296101,
-        "narHash": "sha256-OlOJKZJlmBsKRA1EWHIpgZQa4T7fc90W+2Brw+5WQHQ=",
-        "owner": "carlossless",
+        "lastModified": 1793380166,
+        "narHash": "sha256-P2VNC6SPMrpW+XQVZqnOM7HTspZiFhFYzFoIe6KdziQ=",
+        "owner": "karstx",
         "repo": "sinodude",
-        "rev": "8cdc87ae2f27955877ffedf472b029b4edf05e98",
+        "rev": "2419ec17097e73478b8414816fef65e60dba5fae",
         "type": "github"
       },
       "original": {
-        "owner": "carlossless",
+        "owner": "karstx",
         "repo": "sinodude",
         "type": "github"
       }
@@ -276,11 +276,11 @@
         "utils": "utils_2"
       },
       "locked": {
-        "lastModified": 1788546369,
-        "narHash": "sha256-orfTJyOYDnpb3QuwydI+U27+kyyps5uGXO6KwETOWng=",
+        "lastModified": 1792785015,
+        "narHash": "sha256-svGXTDBPGt08Unf54XT9EqHiPVGE79VexjQy9UjNxFk=",
         "owner": "karstx",
         "repo": "sinowisp",
-        "rev": "2e292356a74fd569255b904dd8445106a2481e43",
+        "rev": "242f7921357bad6df649efdd70c49dd059567ac7",
         "type": "github"
       },
       "original": {

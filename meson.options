@@ -44,8 +44,22 @@ option(
     description : 'Keys that hold the bootloader in ISP mode at power-on. Named without the KC_ prefix and resolved to matrix positions out of each board\'s default layout, so the same chord lands on the right keys on every keyboard.',
 )
 option(
+    'icp_programmer',
+    type : 'combo',
+    choices : ['sinodude-serial', 'sinolink'],
+    value : 'sinodude-serial',
+    description : 'Programmer sinodude drives for the *_full_flash targets: an Arduino running the sinodude-serial firmware, or a SinoLink USB dongle.',
+)
+option(
+    'icp_power',
+    type : 'combo',
+    choices : ['3v3', '5v', 'external'],
+    value : '3v3',
+    description : 'How the SinoLink powers the target while it writes. Cut the board\'s own USB power first. Ignored for sinodude-serial.',
+)
+option(
     'icp_port',
     type : 'string',
     value : '/dev/ttyUSB0',
-    description : 'Serial port of the sinodude-serial programmer, used by the *_full_flash targets that write the stitched bootloader-plus-application image over ICP. On macOS this is a /dev/cu.usbserial-* path.',
+    description : 'Serial port of the sinodude-serial programmer, used by the *_full_flash targets that write the stitched bootloader-plus-application image over ICP. Ignored for sinolink. On macOS this is a /dev/cu.usbserial-* path.',
 )

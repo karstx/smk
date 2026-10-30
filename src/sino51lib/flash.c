@@ -50,6 +50,11 @@ static void ssp_run(uint8_t flashcon, uint16_t addr, uint8_t op, uint8_t data)
 {
     __critical
     {
+#ifdef sfr_page_0
+        // the SSP registers sit on page 0, and the bootloader calls in here with USB's page 1 selected
+        uint8_t saved_page = INSCON;
+        sfr_page_0();
+#endif
         FLASHCON  = flashcon;
         XPAGE     = (uint8_t)(addr >> 8);
         IB_OFFSET = (uint8_t)(addr & 0xFFu);
@@ -59,6 +64,7 @@ static void ssp_run(uint8_t flashcon, uint16_t addr, uint8_t op, uint8_t data)
         IB_CON3   = SSP_KEY_3;
         IB_CON4   = SSP_KEY_4;
         IB_CON5   = SSP_KEY_5;
+        // twelve cycles is what the SH68F89's own ISP code waits; the other parts settle in four
         // clang-format off
         __asm
             nop
@@ -66,10 +72,26 @@ static void ssp_run(uint8_t flashcon, uint16_t addr, uint8_t op, uint8_t data)
             nop
             nop
             nop
+            nop
+            nop
+            nop
+            nop
+            nop
+            nop
+            nop
         __endasm;
         // clang-format on
+        // disarm the keys, as the stock ISP code does; left set, a later IB_* write can start another operation
+        IB_CON1  = 0;
+        IB_CON2  = 0;
+        IB_CON3  = 0;
+        IB_CON4  = 0;
+        IB_CON5  = 0;
         XPAGE    = 0;
         FLASHCON = 0;
+#ifdef sfr_page_0
+        INSCON = saved_page;
+#endif
     }
 }
 

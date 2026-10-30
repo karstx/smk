@@ -4,6 +4,7 @@ keyboards += {
     'ciy-x77' : {
         'dir' : kb_dir,
         'platform' : 'sh68f89',
+        'icp_part' : 'sh68f89',  # the part name sinodude programs it as, over ICP
         'src' : files(
             'indicators.c',
             'user_matrix.c',
@@ -26,6 +27,8 @@ keyboards += {
             'vendor_id' : '0x258a',
             'product_id' : '0x0016',
             'nvm' : '24cxx',
+            # the stock bootloader offsets every page byte, and flashing tools carry that for this board
+            'boot_stock_scramble' : '1',
             'led_rows' : '6',
             'led_cols' : '18',
             'led_cx2' : '17',

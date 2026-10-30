@@ -7,7 +7,7 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
     sinodude = {
-      url = "github:carlossless/sinodude";
+      url = "github:karstx/sinodude";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };

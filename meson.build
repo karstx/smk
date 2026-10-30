@@ -8,6 +8,7 @@ default_options = {
     'nvm' : 'flash',
     'vendor_id' : '0x258a',
     'product_id' : '0xdead',
+    'boot_stock_scramble' : '0',
 }
 
 dir_base = meson.current_source_dir()
@@ -96,6 +97,10 @@ sinowisp = find_program('sinowisp', required : true)
 sinodude = find_program('sinodude', required : false)
 if not sinodude.found()
     message('sinodude not found: skipping the *_full_flash targets (ICP writes)')
+endif
+icp_args = ['--power', get_option('icp_power')]
+if get_option('icp_programmer') == 'sinodude-serial'
+    icp_args = ['--port', get_option('icp_port')]
 endif
 
 # SDCC's -M family is deps-only, so a wrapper writes the depfile ninja needs.
@@ -210,6 +215,7 @@ foreach keyboard, board : keyboards
             '-DKEYBOARD_NAME="@0@"'.format(keyboard),
             '-DAPP_USB_ID="@0@:@1@"'.format(options['vendor_id'], options['product_id']),
             '-DBOOT_CHORD_HEADER="@0@"'.format(chord_header),
+            '-DBOOT_STOCK_SCRAMBLE=@0@'.format(options['boot_stock_scramble']),
         ]
 
         boot_incs = []
@@ -282,7 +288,31 @@ foreach keyboard, board : keyboards
             command : [packihx, '@INPUT@'],
         )
 
-        message('target available: @0@_boot.hex'.format(keyboard))
+        if sinodude.found() and board.has_key('icp_part')
+            # Reset at 0x0000 must already jump to the bootloader, as the stock one lays it out.
+            run_target(
+                '@0@_boot_flash'.format(keyboard),
+                command : [
+                    sinodude,
+                    'write',
+                    '--flash',
+                    hex_boot.full_path(),
+                    '-c',
+                    get_option('icp_programmer'),
+                    '-p',
+                    board['icp_part'],
+                    '--start_addr',
+                    '@0@'.format(bootloader_addr),
+                    '--end_addr',
+                    '@0@'.format(spec['flash_size']),
+                ] + icp_args,
+                depends : hex_boot,
+            )
+
+            message('target available: @0@_boot.hex, flash: @0@_boot_flash'.format(keyboard))
+        else
+            message('target available: @0@_boot.hex'.format(keyboard))
+        endif
     endif
 
     foreach layout, variant : board['layouts']
@@ -438,12 +468,10 @@ foreach keyboard, board : keyboards
                         '--flash',
                         hex_full.full_path(),
                         '-c',
-                        'sinodude-serial',
+                        get_option('icp_programmer'),
                         '-p',
                         board['icp_part'],
-                        '--port',
-                        get_option('icp_port'),
-                    ],
+                    ] + icp_args,
                     depends : hex_full,
                 )
 
@@ -456,7 +484,8 @@ foreach keyboard, board : keyboards
         flash_target_name = '@0@flash'.format(prefix)
         run_target(
             flash_target_name,
-            command : [sinowisp, 'write', '-d', keyboard, '--force', hex_smk.full_path()],  # TODO: try to remove the need for --force
+            # SMK's bootloader reboots on request on every board, including those whose stock one could not
+            command : [sinowisp, 'write', '-d', keyboard, '--reboot', 'true', '--force', hex_smk.full_path()],  # TODO: try to remove the need for --force
             depends : hex_smk,
         )
 

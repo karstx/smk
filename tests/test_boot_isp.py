@@ -175,5 +175,23 @@ class TestPageRead(unittest.TestCase):
                 self.assertEqual(byte, expected, f"flash byte at {BOOT_BASE + offset:#06x}")
 
 
+
+class TestPageWrite(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.addr = 0x0800
+        cls.page = [(i * 7 + 3) & 0xFF for i in range(PAGE_SIZE)]
+        cls.output = SIM.write_page(cls.addr, cls.page)
+
+    def test_page_lands_at_the_requested_address(self):
+        got = SIM.dumped(self.output, self.addr, self.addr + PAGE_SIZE - 1)
+        self.assertEqual(got, self.page)
+
+    def test_flash_keys_are_left_disarmed(self):
+        """Keys left in IB_CON2..5 let a later IB_* write start another operation:
+        on the chip that scattered every page of an ISP write across flash."""
+        self.assertEqual(SIM.dumped(self.output, 0xF2, 0xF6), [0] * 5)
+
+
 if __name__ == "__main__":
     unittest.main()

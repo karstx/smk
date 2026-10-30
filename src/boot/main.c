@@ -76,6 +76,12 @@ static bool chord_held(void)
 
 void main(void)
 {
+    // the application can jump here with any SFR page or flash window selected
+#ifdef sfr_page_0
+    sfr_page_0();
+#endif
+    FLASHCON = 0;
+
     watchdog_kick();
 
     const bool requested = boot_isp_requested();

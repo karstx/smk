@@ -21,7 +21,7 @@ from sim import load_symbols
 
 SIM = BootSim()
 
-CHORD_HEADER_GLOB = "*_boot_chord.h"
+CHORD_HEADER_SUFFIX = "_boot_chord.h"
 
 APP_ENTRY = 0x9000  # a stand-in application: SJMP $, so reaching it is unmistakable
 APP_VECTOR_ADDR = 0xEFFB
@@ -38,11 +38,11 @@ def setUpModule():
 
 def chord_keys():
     """The (column, row) pairs the build resolved the chord to."""
-    build = Path(SIM.firmware).parent
-    headers = sorted(build.glob(CHORD_HEADER_GLOB))
-    if not headers:
-        raise unittest.SkipTest(f"no generated chord header in {build}")
-    text = headers[0].read_text()
+    firmware = Path(SIM.firmware)
+    header = firmware.with_name(firmware.name.replace("_boot.hex", CHORD_HEADER_SUFFIX))
+    if not header.exists():
+        raise unittest.SkipTest(f"no generated chord header {header}")
+    text = header.read_text()
     return [(int(c), int(r)) for c, r in re.findall(r"\{(\d+)u,\s*(\d+)u\}", text)]
 
 

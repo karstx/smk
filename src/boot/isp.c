@@ -15,6 +15,11 @@
 #define XFER_READ_PAGE  0x72u
 #define XFER_WRITE_PAGE 0x77u
 
+// the stock bootloader's offsets on page data, measured on the CIY X77; reads pass the first bytes of a page through
+#define SCRAMBLE_WRITE      0x5au
+#define SCRAMBLE_READ       0x5eu
+#define SCRAMBLE_READ_PLAIN 6u
+
 typedef enum {
     PENDING_NONE,
     PENDING_ERASE,
@@ -167,7 +172,15 @@ uint8_t isp_get_report_byte(uint16_t index)
         return XFER_READ_PAGE;
     }
 
-    return isp_read((uint16_t)(cursor + index - 2u));
+    uint8_t value = isp_read((uint16_t)(cursor + index - 2u));
+
+#if BOOT_STOCK_SCRAMBLE
+    if (index - 2u >= SCRAMBLE_READ_PLAIN) {
+        value += SCRAMBLE_READ;
+    }
+#endif
+
+    return value;
 }
 
 void isp_get_report_end(void)
@@ -211,6 +224,9 @@ void isp_set_report_byte(uint16_t index, uint8_t value)
     }
 
     if (xfer_op == XFER_WRITE_PAGE) {
+#if BOOT_STOCK_SCRAMBLE
+        value -= SCRAMBLE_WRITE;
+#endif
         isp_program((uint16_t)(cursor + index - 2u), value);
     }
 }
