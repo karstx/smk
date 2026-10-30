@@ -67,7 +67,7 @@ void usb_hw_init(void)
     USBADDR = 0;
     EP1CON  = 0;
     EP2CON  = 0;
-    USBIE1  = (_OVERIE | _SETUPIE | _SOFIE | _RESMIE | _SUSPIE | _PBRSTIE);
+    USBIE1  = (_SETUPIE | _SOFIE | _RESMIE | _SUSPIE | _PBRSTIE);
     USBIE2  = (_OEP0IE | _IEP0IE | _IEP1IE | _IEP2IE);
     USBCON  = (_ENUSB | _SW1CON);
 

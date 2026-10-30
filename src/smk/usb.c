@@ -36,6 +36,8 @@
 
 #define BCDHID 0x0111 // HID Class Spec Version
 
+#define ISP_CMD_ENTER 0x75
+
 enum usb_string_index {
     USB_STRING_LANGUAGE_ID   = 0,
     USB_STRING_MANUFACTURER  = 1,
@@ -44,13 +46,18 @@ enum usb_string_index {
 };
 
 typedef enum {
-    USB_EP0_STATE_DEFAULT     = 0x00,
-    USB_EP0_STATE_IN_DATA     = 0x01,
-    USB_EP0_STATE_RECV_STATUS = 0x02,
-    USB_EP0_STATE_LED         = 0x04,
-    USB_EP0_STATE_ISP         = 0x05,
-    USB_EP0_STATE_CONSOLE     = 0x06,
-} usb_ep0_state_t;
+    EP0_STAGE_IDLE,
+    EP0_STAGE_DATA_IN,
+    EP0_STAGE_STATUS_OUT,
+    EP0_STAGE_DATA_OUT,
+    EP0_STAGE_STATUS_IN,
+} ep0_stage_t;
+
+typedef enum {
+    EP0_OUT_LED,
+    EP0_OUT_ISP,
+    EP0_OUT_CONSOLE,
+} ep0_out_target_t;
 
 const uint8_t hid_report_desc_keyboard[] = {
     // clang-format off
@@ -314,45 +321,34 @@ usb_descriptor_set_c usb_descriptor_set = {
 };
 
 // interrupt handlers
-static void usb_setup_irq();
-static void usb_ep0_out_irq();
-static void usb_ep0_in_irq();
+static void usb_setup_irq(void);
+static void usb_ep0_out_irq(void);
+static void usb_ep0_in_irq(void);
 
-// buffer utils
-static void setup_ep0_in_xfer(uint8_t *src, uint16_t len);
-static void step_ep0_in_xfer();
+static void ep0_stall(void);
+static void ep0_ack(void);
+static void ep0_send(uint8_t *src, uint16_t len, uint16_t max_len);
+static void ep0_send_next(void);
+static void ep0_receive(ep0_out_target_t target, uint16_t len);
 static void set_ep0_in_buffer(uint8_t *src, uint8_t len);
 static void get_ep0_out_buffer(uint8_t *dest);
 
 // request handlers
-static void usb_clear_remote_wakeup_handler(struct usb_req_setup *req);
-static void usb_clear_endpoint_halt_handler(struct usb_req_setup *req);
-static void usb_set_remote_wakeup_handler(struct usb_req_setup *req);
-static void usb_set_endpoint_halt_handler(struct usb_req_setup *req);
+static void usb_standard_request(struct usb_req_setup *req);
+static void usb_hid_request(struct usb_req_setup *req);
+static void usb_get_status_handler(struct usb_req_setup *req);
+static void usb_feature_handler(struct usb_req_setup *req, bool set);
 static void usb_set_address_handler(struct usb_req_setup *req);
 static void usb_set_configuration_handler(struct usb_req_setup *req);
+static void usb_get_interface_handler(struct usb_req_setup *req);
 static void usb_set_interface_handler(struct usb_req_setup *req);
-static void usb_set_descriptor_handler();
-static void usb_get_device_status_handler(struct usb_req_setup *req);
-static void usb_get_interface_status_handler(struct usb_req_setup *req);
-static void usb_get_endpoint_status_handler(struct usb_req_setup *req);
 static void usb_get_descriptor_handler(struct usb_req_setup *req);
-static void usb_get_configuration_handler();
-static void usb_get_interface_handler();
-static void usb_hid_get_report_handler();
 static void usb_hid_set_report_handler(struct usb_req_setup *req);
-static void usb_hid_set_idle_handler(struct usb_req_setup *req);
-static void usb_hid_get_idle_handler();
-static void usb_hid_set_protocol_handler(struct usb_req_setup *req);
-static void usb_hid_get_protocol_handler(struct usb_req_setup *req);
 
 /**
  * 0.5KB of general purpose scratch RAM.
  */
 uint8_t scratch[512];
-
-uint16_t ep0_xfer_bytes_left;
-uint8_t *ep0_xfer_src;
 
 // usb state
 usb_device_state_t usb_device_state;
@@ -365,18 +361,27 @@ static __bit usb_remote_wakeup;
 __bit        usb_suspended;
 #ifdef ISP_ENABLE
 static __bit usb_isp_requested;
+static __bit ep0_isp_pending;
 #endif
-uint8_t         idle_time;
-usb_ep0_state_t usb_ep0_state;
+uint8_t idle_time;
+
+static ep0_stage_t      ep0_stage;
+static ep0_out_target_t ep0_out_target;
+static uint8_t          ep0_out_len;
+static uint8_t         *ep0_in_src;
+static uint16_t         ep0_in_left;
+static __bit            ep0_in_fills_wlength;
+static __bit            ep0_in_done;
+static __bit            ep0_address_pending;
 
 #define ENUM_QUIET_MS   500
 #define ENUM_NO_HOST_MS 500
 #define ENUM_GIVE_UP_MS 4000
 
-static uint16_t enum_quiet_ticks;
-static bool     enum_seen;
+static volatile uint16_t enum_quiet_ticks;
+static volatile bool     enum_seen;
 
-void usb_init()
+static void usb_reset_state(void)
 {
     usb_device_state     = USB_DEVICE_STATE_DEFAULT;
     received_usb_addr    = 0;
@@ -385,11 +390,17 @@ void usb_init()
     interface1_protocol  = 0;
     usb_remote_wakeup    = 0;
     usb_suspended        = 0;
-    usb_ep0_state        = USB_EP0_STATE_DEFAULT;
     idle_time            = 0;
+#ifdef ISP_ENABLE
+    ep0_isp_pending = 0;
+#endif
+    ep0_address_pending = 0;
+    ep0_stage           = EP0_STAGE_IDLE;
+}
 
-    ep0_xfer_bytes_left = 0;
-    ep0_xfer_src        = 0;
+void usb_init()
+{
+    usb_reset_state();
 
     enum_quiet_ticks = 0;
     enum_seen        = false;
@@ -399,17 +410,8 @@ void usb_init()
 
 void usb_deinit()
 {
-    usb_device_state     = USB_DEVICE_STATE_DEFAULT;
-    received_usb_addr    = 0;
-    active_configuration = 0;
-    interface0_protocol  = 0;
-    interface1_protocol  = 0;
-    usb_remote_wakeup    = 0;
-    usb_suspended        = 0;
-    usb_ep0_state        = USB_EP0_STATE_DEFAULT;
-    idle_time            = 0;
-
     usb_hw_deinit();
+    usb_reset_state();
 }
 
 void usb_send_report(__xdata report_keyboard_t *report)
@@ -441,8 +443,14 @@ void usb_wait_for_enumeration(void)
     for (uint16_t ms = 0; ms < ENUM_GIVE_UP_MS; ms++) {
         watchdog_kick();
 
+        uint16_t quiet;
+        __critical
+        {
+            quiet = enum_quiet_ticks;
+        }
+
         if (enum_seen) {
-            if (enum_quiet_ticks == 0) {
+            if (quiet == 0) {
                 return;
             }
         } else if (ms >= ENUM_NO_HOST_MS) {
@@ -485,457 +493,551 @@ bool usb_is_configured(void)
     return usb_device_state == USB_DEVICE_STATE_CONFIGURED;
 }
 
-static void usb_setup_irq()
+void usb_irq_dispatch(void)
 {
-    struct usb_req_setup req;
+    uint8_t if1 = USBIF1;
 
-    __critical
-    {
-        get_ep0_out_buffer((uint8_t *)&req);
+    if (if1 & (_USBRSTIF | _PUPIF)) {
+        USBIF1 &= ~(_USBRSTIF | _PUPIF);
+
+        USBCON |= _SWRST;
+        _nop_();
+        _nop_();
+        _nop_();
+        _nop_();
+        _nop_();
+        _nop_();
+        USBCON &= ~_SWRST;
+
+        usb_init();
+        SET_EP0_OUT_RDY;
+        return;
     }
 
-    uint8_t type    = req.bmRequestType;
-    uint8_t request = req.bRequest;
+    if (if1 & _SOFIF) {
+        USBIF1 &= ~_SOFIF;
+        if (enum_quiet_ticks) {
+            enum_quiet_ticks--;
+        }
+        usb_suspended = 0; // a SOF means the host is driving the bus again
+    }
 
-    switch (type) {
-        case (USB_DIR_OUT | USB_TYPE_STANDARD | USB_RECIP_DEVICE):
-            switch (request) {
-                case USB_REQ_CLEAR_FEATURE:
-                    usb_clear_remote_wakeup_handler(&req);
-                    break;
+    if (if1 & _RESMIF) {
+        USBIF1 &= ~_RESMIF;
+    }
 
-                case USB_REQ_SET_FEATURE:
-                    usb_set_remote_wakeup_handler(&req);
-                    break;
+    if (if1 & _SUSPIF) {
+        USBIF1 &= ~_SUSPIF;
+        if (usb_device_state == USB_DEVICE_STATE_CONFIGURED) {
+            usb_suspended = 1;
+        }
+    }
 
-                case USB_REQ_SET_ADDRESS:
-                    usb_set_address_handler(&req);
-                    break;
+    if (if1 & _SETUPIF) {
+        USBIF1 &= ~_SETUPIF;
+        USBIF1 &= ~(_OVERIF | _OW);
+        enum_quiet_ticks = ENUM_QUIET_MS;
+        enum_seen        = true;
+        usb_setup_irq();
+    }
 
-                case USB_REQ_SET_DESCRIPTOR:
-                    usb_set_descriptor_handler();
-                    break;
+    uint8_t if2 = USBIF2;
 
-                case USB_REQ_SET_CONFIGURATION:
-                    usb_set_configuration_handler(&req);
-                    break;
+    if (if2 & _OEP0IF) {
+        USBIF2 &= ~_OEP0IF;
+        usb_ep0_out_irq();
+    }
 
-                default:
-                    STALL_EP0();
-                    return;
-            }
+    if (if2 & _IEP0IF) {
+        USBIF2 &= ~_IEP0IF;
+        usb_ep0_in_irq();
+    }
 
-            break;
+    if (if2 & _IEP2IF) {
+        USBIF2 &= ~_IEP2IF;
+        usb_hw_ep2_in_complete();
+    }
 
-        case (USB_DIR_IN | USB_TYPE_STANDARD | USB_RECIP_DEVICE):
-            switch (request) {
-                case USB_REQ_GET_STATUS:
-                    usb_get_device_status_handler(&req);
-                    break;
-
-                case USB_REQ_GET_DESCRIPTOR:
-                    usb_get_descriptor_handler(&req);
-                    break;
-
-                case USB_REQ_GET_CONFIGURATION:
-                    usb_get_configuration_handler();
-                    break;
-
-                default:
-                    STALL_EP0();
-                    return;
-            }
-
-            break;
-
-        case (USB_DIR_OUT | USB_TYPE_STANDARD | USB_RECIP_IFACE):
-            switch (request) {
-                case USB_REQ_SET_INTERFACE:
-                    usb_set_interface_handler(&req);
-                    break;
-
-                default:
-                    STALL_EP0();
-                    return;
-            }
-
-            break;
-
-        case (USB_DIR_IN | USB_TYPE_STANDARD | USB_RECIP_IFACE):
-            switch (request) {
-                case USB_REQ_GET_STATUS:
-                    usb_get_interface_status_handler(&req);
-                    break;
-
-                case USB_REQ_GET_DESCRIPTOR:
-                    usb_get_descriptor_handler(&req);
-                    break;
-
-                case USB_REQ_GET_INTERFACE:
-                    usb_get_interface_handler();
-                    break;
-
-                default:
-                    STALL_EP0();
-                    return;
-            }
-
-            break;
-
-        case (USB_DIR_OUT | USB_TYPE_STANDARD | USB_RECIP_ENDPT):
-            switch (request) {
-                case USB_REQ_CLEAR_FEATURE:
-                    usb_clear_endpoint_halt_handler(&req);
-                    break;
-
-                case USB_REQ_SET_FEATURE:
-                    usb_set_endpoint_halt_handler(&req);
-                    break;
-
-                default:
-                    STALL_EP0();
-                    return;
-            }
-
-            break;
-
-        case (USB_DIR_IN | USB_TYPE_STANDARD | USB_RECIP_ENDPT):
-            switch (request) {
-                case USB_REQ_GET_STATUS:
-                    usb_get_endpoint_status_handler(&req);
-                    break;
-
-                default:
-                    STALL_EP0();
-                    return;
-            }
-
-            break;
-
-        case (USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_IFACE):
-            switch (request) {
-                case USB_HID_REQ_SET_REPORT:
-                    usb_hid_set_report_handler(&req);
-                    break;
-
-                case USB_HID_REQ_SET_IDLE:
-                    usb_hid_set_idle_handler(&req);
-                    break;
-
-                case USB_HID_REQ_SET_PROTOCOL:
-                    usb_hid_set_protocol_handler(&req);
-                    break;
-
-                default:
-                    STALL_EP0();
-                    return;
-            }
-
-            break;
-
-        case (USB_DIR_IN | USB_TYPE_CLASS | USB_RECIP_IFACE):
-            switch (request) {
-                case USB_HID_REQ_GET_REPORT:
-                    usb_hid_get_report_handler();
-                    break;
-
-                case USB_HID_REQ_GET_IDLE:
-                    usb_hid_get_idle_handler();
-                    break;
-
-                case USB_HID_REQ_GET_PROTOCOL:
-                    usb_hid_get_protocol_handler(&req);
-                    break;
-
-                default:
-                    STALL_EP0();
-                    return;
-            }
-
-            break;
-
-        default:
-            STALL_EP0();
-            return;
+    if (if2 & _IEP1IF) {
+        USBIF2 &= ~_IEP1IF;
+        usb_hw_ep1_in_complete();
     }
 }
 
-void usb_irq_dispatch(void)
+static void usb_setup_irq(void)
 {
-    uint8_t temp_usbif1 = USBIF1;
-    uint8_t temp_usbif2 = USBIF2;
+    struct usb_req_setup req;
 
-    if (temp_usbif1 != 0x00) {
-        if (temp_usbif1 & _SOFIF) {
-            USBIF1 &= ~_SOFIF;
-            if (enum_quiet_ticks) {
-                enum_quiet_ticks--;
-            }
-            usb_suspended = 0; // a SOF means the host is driving the bus again
-        } else {
-            USBIF1 &= ~(_SETUPIF);      // Clear SETUPIF
-            USBIF1 &= ~(_OVERIF | _OW); // SETUP OVERIF & OW
+    if ((USBIF2 & _IEP0IF) && ep0_stage == EP0_STAGE_STATUS_IN) {
+        usb_ep0_in_irq();
+    }
+    USBIF2 &= ~(_IEP0IF | _OEP0IF);
+    ep0_stage           = EP0_STAGE_IDLE;
+    ep0_address_pending = 0;
+#ifdef ISP_ENABLE
+    ep0_isp_pending = 0;
+#endif
 
-            if (temp_usbif1 & _PUPIF) {
-                USBIF1 &= ~_PUPIF;
-                usb_init();
-            } else if (temp_usbif1 & _SETUPIF) {
-                USBIF1 &= ~_SETUPIF;
-                USBIF2 &= ~_IEP0IF;
-                enum_quiet_ticks = ENUM_QUIET_MS;
-                enum_seen        = true;
-                usb_setup_irq();
-            } else if (temp_usbif1 & _RESMIF) { // RESMIF
-                USBIF1 &= ~_RESMIF;
-            } else if (temp_usbif1 & _SUSPIF) { // SUSPIF
-                USBIF1 &= ~_SUSPIF;
-                if (usb_device_state == USB_DEVICE_STATE_CONFIGURED) {
-                    usb_suspended = 1;
+    get_ep0_out_buffer((uint8_t *)&req);
+
+    switch (req.bmRequestType & USB_TYPE_MASK) {
+        case USB_TYPE_STANDARD:
+            usb_standard_request(&req);
+            break;
+
+        case USB_TYPE_CLASS:
+            usb_hid_request(&req);
+            break;
+
+        default:
+            ep0_stall();
+            break;
+    }
+}
+
+static void usb_ep0_out_irq(void)
+{
+    SET_EP0_OUT_RDY;
+
+    if (ep0_stage == EP0_STAGE_DATA_OUT) {
+        if (GET_EP0_OUT_CNT() != ep0_out_len) {
+            ep0_stall();
+            return;
+        }
+
+        switch (ep0_out_target) {
+            case EP0_OUT_LED:
+                keyboard_set_led_state(EP0_OUT_BUF[0]);
+                break;
+
+#ifdef ISP_ENABLE
+            case EP0_OUT_ISP:
+                if (EP0_OUT_BUF[0] == REPORT_ID_ISP && EP0_OUT_BUF[1] == ISP_CMD_ENTER) {
+                    ep0_isp_pending = 1;
                 }
-            } else if (temp_usbif1 & _USBRSTIF) { // BUSRSTIF
-                USBIF1 &= ~_USBRSTIF;
+                break;
+#endif
 
-                USBCON |= _SWRST;
-                _nop_();
-                _nop_();
-                _nop_();
-                _nop_();
-                _nop_();
-                _nop_();
-                USBCON &= ~_SWRST;
+#if DEBUG == 1
+            case EP0_OUT_CONSOLE:
+                console_notify_attached(); // host tool is listening; start draining
+                break;
+#endif
 
-                usb_init();
-                SET_EP0_OUT_RDY;
-            }
+            default:
+                break;
         }
-    } else if (temp_usbif2 != 0x00) {
-        if (temp_usbif2 & _OEP2IF) {
-            USBIF2 &= ~_OEP2IF;
-            SET_EP2_OUT_RDY;
-        } else if (temp_usbif2 & _OEP1IF) {
-            USBIF2 &= ~_OEP1IF;
-        } else if (temp_usbif2 & _OEP0IF) {
-            USBIF2 &= ~_OEP0IF;
-            usb_ep0_out_irq();
-            SET_EP0_OUT_RDY;
-        } else if (temp_usbif2 & _IEP2IF) {
-            USBIF2 &= ~_IEP2IF;
-            usb_hw_ep2_in_complete();
-        } else if (temp_usbif2 & _IEP1IF) {
-            USBIF2 &= ~_IEP1IF;
-            usb_hw_ep1_in_complete();
-        } else if (temp_usbif2 & _IEP0IF) {
-            USBIF2 &= ~_IEP0IF;
-            usb_ep0_in_irq();
+        ep0_ack();
+    } else if (ep0_stage == EP0_STAGE_DATA_IN || ep0_stage == EP0_STAGE_STATUS_OUT) {
+        ep0_stage = EP0_STAGE_IDLE;
+    }
+}
+
+static void usb_ep0_in_irq(void)
+{
+    if (ep0_stage == EP0_STAGE_DATA_IN) {
+        ep0_send_next();
+    } else if (ep0_stage == EP0_STAGE_STATUS_IN) {
+        ep0_stage = EP0_STAGE_IDLE;
+
+        if (ep0_address_pending) {
+            ep0_address_pending = 0;
+            USBADDR             = received_usb_addr;
         }
+
+#ifdef ISP_ENABLE
+        if (ep0_isp_pending) {
+            ep0_isp_pending   = 0;
+            usb_isp_requested = 1;
+        }
+#endif
+    }
+}
+
+static void ep0_stall(void)
+{
+    ep0_stage = EP0_STAGE_IDLE;
+    STALL_EP0();
+    SET_EP0_OUT_RDY;
+}
+
+static void ep0_ack(void)
+{
+    SET_EP0_OUT_RDY;
+    ep0_stage = EP0_STAGE_STATUS_IN;
+    SET_EP0_CNT(0);
+    SET_EP0_IN_RDY;
+}
+
+static void ep0_send(uint8_t *src, uint16_t len, uint16_t max_len)
+{
+    if (max_len == 0) {
+        ep0_ack();
+        return;
+    }
+
+    if (len > max_len) {
+        len = max_len;
+    }
+
+    ep0_in_src           = src;
+    ep0_in_left          = len;
+    ep0_in_fills_wlength = (len == max_len);
+    ep0_in_done          = 0;
+    ep0_stage            = EP0_STAGE_DATA_IN;
+
+    SET_EP0_OUT_RDY;
+    ep0_send_next();
+}
+
+static void ep0_send_next(void)
+{
+    if (ep0_in_done) {
+        ep0_stage = EP0_STAGE_STATUS_OUT;
+        return;
+    }
+
+    uint8_t len = (ep0_in_left > EP0_BUF_SIZE) ? EP0_BUF_SIZE : (uint8_t)ep0_in_left;
+
+    set_ep0_in_buffer(ep0_in_src, len);
+    SET_EP0_CNT(len);
+    SET_EP0_IN_RDY;
+
+    ep0_in_src += len;
+    ep0_in_left -= len;
+    ep0_in_done = (len < EP0_BUF_SIZE) || (ep0_in_left == 0 && ep0_in_fills_wlength);
+}
+
+static void ep0_receive(ep0_out_target_t target, uint16_t len)
+{
+    if (len == 0 || len > EP0_BUF_SIZE) {
+        ep0_stall();
+        return;
+    }
+
+    ep0_out_target = target;
+    ep0_out_len    = len;
+    ep0_stage      = EP0_STAGE_DATA_OUT;
+    SET_EP0_OUT_RDY;
+}
+
+static void set_ep0_in_buffer(uint8_t *src, uint8_t len)
+{
+    for (uint8_t i = 0; i < len; i++) {
+        EP0_IN_BUF[i] = src[i];
+    }
+}
+
+static void get_ep0_out_buffer(uint8_t *dest)
+{
+    for (uint8_t i = 0; i < EP0_BUF_SIZE; i++) {
+        dest[i] = EP0_OUT_BUF[i];
     }
 }
 
 // request handlers
 
+static void usb_standard_request(struct usb_req_setup *req)
+{
+    bool in = (req->bmRequestType & USB_DIR_MASK) == USB_DIR_IN;
+
+    switch (req->bRequest) {
+        case USB_REQ_GET_STATUS:
+            if (in) {
+                usb_get_status_handler(req);
+                return;
+            }
+            break;
+
+        case USB_REQ_CLEAR_FEATURE:
+        case USB_REQ_SET_FEATURE:
+            if (!in) {
+                usb_feature_handler(req, req->bRequest == USB_REQ_SET_FEATURE);
+                return;
+            }
+            break;
+
+        case USB_REQ_SET_ADDRESS:
+            if (!in && (req->bmRequestType & USB_RECIP_MASK) == USB_RECIP_DEVICE) {
+                usb_set_address_handler(req);
+                return;
+            }
+            break;
+
+        case USB_REQ_GET_DESCRIPTOR:
+            if (in) {
+                usb_get_descriptor_handler(req);
+                return;
+            }
+            break;
+
+        case USB_REQ_GET_CONFIGURATION:
+            if (in && (req->bmRequestType & USB_RECIP_MASK) == USB_RECIP_DEVICE) {
+                scratch[0] = active_configuration;
+                ep0_send(scratch, 1, req->wLength);
+                return;
+            }
+            break;
+
+        case USB_REQ_SET_CONFIGURATION:
+            if (!in && (req->bmRequestType & USB_RECIP_MASK) == USB_RECIP_DEVICE) {
+                usb_set_configuration_handler(req);
+                return;
+            }
+            break;
+
+        case USB_REQ_GET_INTERFACE:
+            if (in && (req->bmRequestType & USB_RECIP_MASK) == USB_RECIP_IFACE) {
+                usb_get_interface_handler(req);
+                return;
+            }
+            break;
+
+        case USB_REQ_SET_INTERFACE:
+            if (!in && (req->bmRequestType & USB_RECIP_MASK) == USB_RECIP_IFACE) {
+                usb_set_interface_handler(req);
+                return;
+            }
+            break;
+
+        default:
+            break;
+    }
+
+    ep0_stall();
+}
+
+static void usb_hid_request(struct usb_req_setup *req)
+{
+    uint8_t iface = req->wIndex & 0xff;
+
+    if ((req->bmRequestType & USB_RECIP_MASK) != USB_RECIP_IFACE || iface > 1) {
+        ep0_stall();
+        return;
+    }
+
+    bool in = (req->bmRequestType & USB_DIR_MASK) == USB_DIR_IN;
+
+    switch (req->bRequest) {
+        case USB_HID_REQ_SET_REPORT:
+            if (!in) {
+                usb_hid_set_report_handler(req);
+                return;
+            }
+            break;
+
+        case USB_HID_REQ_SET_IDLE:
+            if (!in) {
+                // TODO: finish implementaiton to use the set idle time
+                idle_time = req->wValue >> 8;
+                ep0_ack();
+                return;
+            }
+            break;
+
+        case USB_HID_REQ_GET_IDLE:
+            if (in) {
+                scratch[0] = idle_time;
+                ep0_send(scratch, 1, req->wLength);
+                return;
+            }
+            break;
+
+        case USB_HID_REQ_SET_PROTOCOL:
+            if (!in && req->wValue <= USB_PROTOCOL_REPORT) {
+                if (iface == 0) {
+                    interface0_protocol = req->wValue;
+                } else {
+                    interface1_protocol = req->wValue;
+                }
+                ep0_ack();
+                return;
+            }
+            break;
+
+        case USB_HID_REQ_GET_PROTOCOL:
+            if (in) {
+                scratch[0] = (iface == 0) ? interface0_protocol : interface1_protocol;
+                ep0_send(scratch, 1, req->wLength);
+                return;
+            }
+            break;
+
+        default:
+            break;
+    }
+
+    ep0_stall();
+}
+
+static void usb_get_status_handler(struct usb_req_setup *req)
+{
+    scratch[0] = 0;
+    scratch[1] = 0;
+
+    switch (req->bmRequestType & USB_RECIP_MASK) {
+        case USB_RECIP_DEVICE:
+            if (usb_remote_wakeup) {
+                scratch[0] = 0x02;
+            }
+            break;
+
+        case USB_RECIP_IFACE:
+            if (!usb_is_configured() || req->wIndex > 1) {
+                ep0_stall();
+                return;
+            }
+            break;
+
+        case USB_RECIP_ENDPT:
+            switch (req->wIndex) {
+                case 0x00:
+                case 0x80:
+                    break;
+
+                case 0x81:
+                    if (!usb_is_configured()) {
+                        ep0_stall();
+                        return;
+                    }
+                    scratch[0] = (EP1CON & _IEP1STL) ? 1 : 0;
+                    break;
+
+                case 0x82:
+                    if (!usb_is_configured()) {
+                        ep0_stall();
+                        return;
+                    }
+                    scratch[0] = (EP2CON & _IEP2STL) ? 1 : 0;
+                    break;
+
+                default:
+                    ep0_stall();
+                    return;
+            }
+            break;
+
+        default:
+            ep0_stall();
+            return;
+    }
+
+    ep0_send(scratch, 2, req->wLength);
+}
+
+static void usb_feature_handler(struct usb_req_setup *req, bool set)
+{
+    switch (req->bmRequestType & USB_RECIP_MASK) {
+        case USB_RECIP_DEVICE:
+            if (req->wValue == USB_FEAT_DEVICE_REMOTE_WAKEUP) {
+                usb_remote_wakeup = set;
+                ep0_ack();
+                return;
+            }
+            break;
+
+        case USB_RECIP_ENDPT:
+            if (req->wValue != USB_FEAT_ENDPOINT_HALT) {
+                break;
+            }
+
+            if (req->wIndex == 0x00 || req->wIndex == 0x80) {
+                ep0_ack();
+                return;
+            }
+
+            if (!usb_is_configured()) {
+                break;
+            }
+
+            if (req->wIndex == 0x81) {
+                if (set) {
+                    SET_EP1_IN_STALL;
+                } else {
+                    EP1CON &= ~(_IEP1STL | _IEP1DTG);
+                }
+                ep0_ack();
+                return;
+            }
+
+            if (req->wIndex == 0x82) {
+                if (set) {
+                    SET_EP2_IN_STALL;
+                } else {
+                    EP2CON &= ~(_IEP2STL | _IEP2DTG);
+                }
+                ep0_ack();
+                return;
+            }
+            break;
+
+        default:
+            break;
+    }
+
+    ep0_stall();
+}
+
 static void usb_set_address_handler(struct usb_req_setup *req)
 {
-    usb_ep0_state = USB_EP0_STATE_DEFAULT;
+    if (req->wValue > 127) {
+        ep0_stall();
+        return;
+    }
 
-    if (req->wValue != 0) {
+    received_usb_addr   = req->wValue;
+    ep0_address_pending = 1;
+
+    if (received_usb_addr != 0) {
         usb_device_state = USB_DEVICE_STATE_ADDRESSED;
     } else {
         usb_device_state = USB_DEVICE_STATE_DEFAULT;
     }
 
-    received_usb_addr = req->wValue;
-
-    CLEAR_EP0_CNT;
-    SET_EP0_OUT_STALL;
-    SET_EP0_IN_RDY;
-}
-
-static void usb_clear_remote_wakeup_handler(struct usb_req_setup *req)
-{
-    usb_ep0_state = USB_EP0_STATE_DEFAULT;
-
-    if ((req->bmRequestType & USB_RECIP_MASK) == USB_RECIP_DEVICE) {
-        if (req->wValue == USB_FEAT_DEVICE_REMOTE_WAKEUP) {
-            usb_remote_wakeup = 0;
-        }
-    }
-
-    CLEAR_EP0_CNT;
-    SET_EP0_IN_RDY;
-}
-
-static void usb_set_remote_wakeup_handler(struct usb_req_setup *req)
-{
-    usb_ep0_state = USB_EP0_STATE_DEFAULT;
-
-    if ((req->bmRequestType & USB_RECIP_MASK) == USB_RECIP_DEVICE) {
-        if (req->wValue == USB_FEAT_DEVICE_REMOTE_WAKEUP) {
-            usb_remote_wakeup = 1;
-        }
-    }
-
-    CLEAR_EP0_CNT;
-    SET_EP0_IN_RDY;
-}
-
-static void usb_clear_endpoint_halt_handler(struct usb_req_setup *req)
-{
-    usb_ep0_state = USB_EP0_STATE_DEFAULT;
-
-    if ((req->bmRequestType & USB_RECIP_MASK) == USB_RECIP_ENDPT) {
-        if (req->wValue == USB_FEAT_ENDPOINT_HALT) {
-            if (req->wIndex == 0) {
-                CANCEL_EP0_IN_STALL;
-                CANCEL_EP0_OUT_STALL;
-            } else if (req->wIndex == 0x81) {
-                CANCEL_EP1_IN_STALL;
-            } else if (req->wIndex == 0x82) {
-                CANCEL_EP2_IN_STALL;
-            } else {
-                STALL_EP0();
-                return;
-            }
-        }
-    }
-
-    CLEAR_EP0_CNT;
-    SET_EP0_IN_RDY;
-}
-
-static void usb_set_endpoint_halt_handler(struct usb_req_setup *req)
-{
-    usb_ep0_state = USB_EP0_STATE_DEFAULT;
-
-    if ((req->bmRequestType & USB_RECIP_MASK) == USB_RECIP_ENDPT) {
-        if (req->wIndex == 0x81) {
-            SET_EP1_IN_STALL;
-        } else if (req->wIndex == 0x82) {
-            SET_EP2_IN_STALL;
-        } else {
-            STALL_EP0();
-        }
-    } else {
-        STALL_EP0();
-        return;
-    }
-
-    CLEAR_EP0_CNT;
-    SET_EP0_IN_RDY;
+    ep0_ack();
 }
 
 static void usb_set_configuration_handler(struct usb_req_setup *req)
 {
-    usb_ep0_state = USB_EP0_STATE_DEFAULT;
-
     // USBADDR does not read back on every part, so test the address we assigned.
-    if (received_usb_addr) {
-        if ((req->wValue == 0) || (req->wValue == 1)) {
-            active_configuration = req->wValue;
-
-            if (active_configuration != 0) {
-                usb_device_state = USB_DEVICE_STATE_CONFIGURED;
-            } else {
-                usb_device_state = USB_DEVICE_STATE_ADDRESSED;
-            }
-
-            CLEAR_EP0_CNT;
-            SET_EP0_IN_RDY;
-        } else {
-            STALL_EP0();
-        }
-    } else {
-        STALL_EP0();
+    if (!received_usb_addr || req->wValue > 1) {
+        ep0_stall();
+        return;
     }
 
-    CLEAR_EP0_CNT;
-    SET_EP0_IN_RDY;
+    active_configuration = req->wValue;
+
+    if (active_configuration != 0) {
+        usb_device_state = USB_DEVICE_STATE_CONFIGURED;
+    } else {
+        usb_device_state = USB_DEVICE_STATE_ADDRESSED;
+    }
+
+    EP1CON &= ~(_IEP1STL | _IEP1DTG);
+    EP2CON &= ~(_IEP2STL | _IEP2DTG);
+
+    ep0_ack();
+}
+
+static void usb_get_interface_handler(struct usb_req_setup *req)
+{
+    if (!usb_is_configured() || req->wIndex > 1) {
+        ep0_stall();
+        return;
+    }
+
+    scratch[0] = 0;
+    ep0_send(scratch, 1, req->wLength);
 }
 
 static void usb_set_interface_handler(struct usb_req_setup *req)
 {
-    usb_ep0_state = USB_EP0_STATE_DEFAULT;
-
-    if (req->wValue == 0) {
-        if (req->wIndex == 0) {
-            CLEAR_EP0_CNT;
-            SET_EP0_IN_RDY;
-            SET_EP0_OUT_STALL;
-        } else if (req->wIndex == 1) {
-            CLEAR_EP0_CNT;
-            SET_EP0_IN_RDY;
-            SET_EP0_OUT_STALL;
-        } else {
-            STALL_EP0();
-        }
-    } else {
-        STALL_EP0();
+    if (!usb_is_configured() || req->wIndex > 1 || req->wValue != 0) {
+        ep0_stall();
+        return;
     }
-}
 
-static void usb_set_descriptor_handler()
-{
-    STALL_EP0();
-}
-
-static void usb_get_device_status_handler(struct usb_req_setup *req)
-{
-    usb_ep0_state = USB_EP0_STATE_RECV_STATUS;
-
-    if ((req->bmRequestType & USB_RECIP_MASK) == USB_RECIP_DEVICE) {
-        if (usb_remote_wakeup) {
-            EP0_IN_BUF[0] = 0x02;
-        } else {
-            EP0_IN_BUF[0] = 0x00;
-        }
-
-        EP0_IN_BUF[1] = 0;
-
-        SET_EP0_CNT(2);
-        SET_EP0_IN_RDY;
-    } else {
-        STALL_EP0();
-    }
-}
-
-static void usb_get_interface_status_handler(struct usb_req_setup *req)
-{
-    if ((req->bmRequestType & USB_RECIP_MASK) == USB_RECIP_IFACE) {
-        if ((req->wIndex == 0) || (req->wIndex == 1)) {
-            EP0_IN_BUF[0] = 0;
-            EP0_IN_BUF[1] = 0;
-
-            SET_EP0_CNT(2);
-            SET_EP0_IN_RDY;
-        } else {
-            STALL_EP0();
-        }
-    } else {
-        STALL_EP0();
-    }
-}
-
-static void usb_get_endpoint_status_handler(struct usb_req_setup *req)
-{
-    if ((req->bmRequestType & USB_RECIP_MASK) == USB_RECIP_ENDPT) {
-        if (req->wIndex == 0x80) {
-            EP0_IN_BUF[0] = ((EP0CON & 0x02)) >> 1;
-            EP0_IN_BUF[1] = 0;
-        } else if (req->wIndex == 0x81) {
-            EP0_IN_BUF[0] = ((EP1CON & 0x08)) >> 3;
-            EP0_IN_BUF[1] = 0;
-        } else if (req->wIndex == 0x82) {
-            EP0_IN_BUF[0] = ((EP2CON & 0x08)) >> 3;
-            EP0_IN_BUF[1] = 0;
-        } else {
-            STALL_EP0();
-            return;
-        }
-
-        SET_EP0_CNT(2);
-        SET_EP0_IN_RDY;
-    } else {
-        STALL_EP0();
-    }
+    ep0_ack();
 }
 
 static void usb_get_descriptor_handler(struct usb_req_setup *req)
@@ -1010,7 +1112,7 @@ static void usb_get_descriptor_handler(struct usb_req_setup *req)
             addr   = (uint8_t *)hid_report_desc_extra;
             length = sizeof(hid_report_desc_extra);
         } else {
-            STALL_EP0();
+            ep0_stall();
             return;
         }
     } else if (type == USB_DESC_CLASS_HID) {
@@ -1027,222 +1129,44 @@ static void usb_get_descriptor_handler(struct usb_req_setup *req)
             addr   = scratch;
             length = scratch[0];
         } else {
-            STALL_EP0();
+            ep0_stall();
             return;
         }
     } else {
-        STALL_EP0();
+        ep0_stall();
         return;
     }
 
-    uint16_t received_length = req->wLength;
-    // truncate data to the allowed lengths received from the host
-    length = (received_length < length) ? received_length : length;
-    setup_ep0_in_xfer(addr, length);
-    step_ep0_in_xfer();
-
-    SET_EP0_IN_RDY;
-}
-
-static void usb_get_configuration_handler()
-{
-    usb_ep0_state = USB_EP0_STATE_RECV_STATUS;
-
-    EP0_IN_BUF[0] = active_configuration;
-
-    SET_EP0_CNT(1);
-    SET_EP0_IN_RDY;
-}
-
-static void usb_get_interface_handler()
-{
-    usb_ep0_state = USB_EP0_STATE_RECV_STATUS;
-
-    EP0_IN_BUF[0] = 0;
-
-    SET_EP0_CNT(1);
-    SET_EP0_IN_RDY;
-}
-
-static void usb_hid_get_report_handler()
-{
-    STALL_EP0();
+    ep0_send(addr, length, req->wLength);
 }
 
 static void usb_hid_set_report_handler(struct usb_req_setup *req)
 {
-    switch (req->wValue >> 8) {
-        case REPORT_TYPE_OUTPUT:
-            if ((req->wIndex == 0) && (req->wLength == 0x0001)) {
-                usb_ep0_state = USB_EP0_STATE_LED;
-                SET_EP0_OUT_RDY;
-            }
+    uint8_t report_type = req->wValue >> 8;
+    uint8_t report_id   = req->wValue & 0xff;
+    uint8_t iface       = req->wIndex & 0xff;
 
-            break;
+    (void)report_id;
 
-        case REPORT_TYPE_FEATURE: {
-            uint8_t report_id = (uint8_t)(req->wValue & 0xff);
-            (void)report_id;
-#ifdef ISP_ENABLE
-            if (report_id == REPORT_ID_ISP) {
-                usb_ep0_state = USB_EP0_STATE_ISP;
-                SET_EP0_OUT_RDY;
-            }
-#endif
-#if DEBUG == 1
-            if (report_id == REPORT_ID_CONSOLE) {
-                usb_ep0_state = USB_EP0_STATE_CONSOLE;
-                SET_EP0_OUT_RDY;
-            }
-#endif
-
-            break;
-        }
-
-        default:
-            STALL_EP0();
-            break;
-    }
-}
-
-static void usb_hid_set_idle_handler(struct usb_req_setup *req)
-{
-    // TODO: finish implementaiton to use the set idle time
-    idle_time = req->wValue >> 8;
-
-    CLEAR_EP0_CNT;
-    SET_EP0_IN_RDY;
-}
-
-static void usb_hid_get_idle_handler()
-{
-    EP0_IN_BUF[0] = idle_time;
-
-    SET_EP0_CNT(1);
-    SET_EP0_IN_RDY;
-}
-
-static void usb_hid_set_protocol_handler(struct usb_req_setup *req)
-{
-    if (req->wIndex == 0) {
-        interface0_protocol = req->wValue & 0xff;
-    } else if (req->wIndex == 1) {
-        interface1_protocol = req->wValue & 0xff;
-    }
-
-    CLEAR_EP0_CNT;
-    SET_EP0_IN_RDY;
-}
-
-static void usb_hid_get_protocol_handler(struct usb_req_setup *req)
-{
-    if (req->wIndex == 0) {
-        EP0_IN_BUF[0] = interface0_protocol;
-    } else if (req->wIndex == 1) {
-        EP0_IN_BUF[0] = interface1_protocol;
-    }
-
-    SET_EP0_CNT(1);
-    SET_EP0_IN_RDY;
-}
-
-void usb_ep0_out_irq()
-{
-    if (usb_ep0_state == USB_EP0_STATE_LED) {
-        usb_ep0_state = 0;
-
-        keyboard_set_led_state(EP0_OUT_BUF[0]);
-
-        CLEAR_EP0_CNT;
-        SET_EP0_IN_RDY;
-#ifdef ISP_ENABLE
-    } else if (usb_ep0_state == USB_EP0_STATE_ISP) {
-        usb_ep0_state = 0;
-
-        if (EP0_OUT_BUF[0] == 0x05 && EP0_OUT_BUF[1] == 0x75) {
-            usb_isp_requested = 1;
-        }
-#endif
-#if DEBUG == 1
-    } else if (usb_ep0_state == USB_EP0_STATE_CONSOLE) {
-        usb_ep0_state = 0;
-
-        console_notify_attached(); // host tool is listening; start draining
-
-        CLEAR_EP0_CNT;
-        SET_EP0_IN_RDY;
-#endif
-    } else {
-        usb_ep0_state = 0;
-        CLEAR_EP0_CNT;
-        SET_EP0_IN_RDY;
-    }
-}
-
-void usb_ep0_in_irq()
-{
-    if (usb_ep0_state == USB_EP0_STATE_IN_DATA) {
-        step_ep0_in_xfer();
-
-        SET_EP0_IN_RDY;
-        SET_EP0_OUT_RDY;
-    } else if (usb_ep0_state == USB_EP0_STATE_RECV_STATUS) {
-        SET_EP0_OUT_RDY;
-        SET_EP0_IN_STALL;
-    } else {
-        SET_EP0_IN_STALL;
-        SET_EP0_OUT_RDY;
-
-        USBADDR = received_usb_addr;
-    }
-}
-
-static void setup_ep0_in_xfer(uint8_t *src, uint16_t len)
-{
-    ep0_xfer_src        = src;
-    ep0_xfer_bytes_left = len;
-}
-
-static void step_ep0_in_xfer()
-{
-    if (ep0_xfer_bytes_left == 0) {
-        usb_ep0_state = USB_EP0_STATE_RECV_STATUS;
-
-        SET_EP0_CNT(0);
-    } else if (ep0_xfer_bytes_left > EP0_BUF_SIZE) {
-        usb_ep0_state = USB_EP0_STATE_IN_DATA;
-        set_ep0_in_buffer(ep0_xfer_src, EP0_BUF_SIZE);
-        ep0_xfer_bytes_left -= EP0_BUF_SIZE;
-        ep0_xfer_src += EP0_BUF_SIZE;
-
-        SET_EP0_CNT(EP0_BUF_SIZE);
-    } else if (ep0_xfer_bytes_left == EP0_BUF_SIZE) {
-        usb_ep0_state = USB_EP0_STATE_IN_DATA;
-        set_ep0_in_buffer(ep0_xfer_src, EP0_BUF_SIZE);
-        ep0_xfer_bytes_left = 0;
-
-        SET_EP0_CNT(EP0_BUF_SIZE);
-    } else {
-        usb_ep0_state = USB_EP0_STATE_RECV_STATUS;
-        set_ep0_in_buffer(ep0_xfer_src, ep0_xfer_bytes_left);
-
-        SET_EP0_CNT(ep0_xfer_bytes_left);
-    }
-}
-
-static void set_ep0_in_buffer(uint8_t *src, uint8_t len)
-{
-    if (len > EP0_BUF_SIZE) {
+    if (report_type == REPORT_TYPE_OUTPUT && iface == 0 && req->wLength == 1) {
+        ep0_receive(EP0_OUT_LED, req->wLength);
         return;
     }
-    for (uint8_t i = 0; i < len; i++) {
-        EP0_IN_BUF[i] = src[i];
-    }
-}
 
-static void get_ep0_out_buffer(uint8_t *dest)
-{
-    for (uint8_t i = 0; i < EP0_BUF_SIZE; i++) {
-        dest[i] = EP0_OUT_BUF[i];
+    if (report_type == REPORT_TYPE_FEATURE && iface == 1) {
+#ifdef ISP_ENABLE
+        if (report_id == REPORT_ID_ISP) {
+            ep0_receive(EP0_OUT_ISP, req->wLength);
+            return;
+        }
+#endif
+#if DEBUG == 1
+        if (report_id == REPORT_ID_CONSOLE) {
+            ep0_receive(EP0_OUT_CONSOLE, req->wLength);
+            return;
+        }
+#endif
     }
+
+    ep0_stall();
 }

@@ -50,7 +50,7 @@ static void ep2_in_drain(void)
 void usb_hw_init(void)
 {
     USBADDR = 0;
-    USBIE1  = (_OVERIE | _SETUPIE | _SOFIA | _RESMIE | _SUSPIE | _PBRSTIE);
+    USBIE1  = (_SETUPIE | _SOFIA | _RESMIE | _SUSPIE | _PBRSTIE);
     USBIE2  = (_OEP0IE | _IEP0IE);
     USBCON  = (_ENUSB | _SW1CON);
     IEN1 |= _EUSB;
