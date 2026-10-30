@@ -12,9 +12,7 @@ The S (Small) in SMK comes from this firmware using [SDCC](https://sdcc.sourcefo
 
 ## ⚠️ WARNING ⚠️
 
-This firmware is still highly experimental, so be cautious when trying to use it or extend it.
-
-You can very easily end up with a bricked device if the written firmware can't jump back into ISP mode, so before testing or modifying it, it's best to have a full dump of your stock firmware and a programming tool (like an Arduino Nano + [sinodude-serial](https://github.com/karstx/sinodude/tree/main/firmware) or SinoWealth SinoLink + ProWriter) that can write it back.
+You can very easily end up with a bricked device if the written firmware can't jump back into ISP mode, so before testing or modifying it, it's best to have a full dump of your stock firmware and a [programming tool](#programming-tools) that can write it back.
 
 SMK ships [its own ISP bootloader](docs/bootloader.md), which takes that failure mode away: holding **S + M + K** while plugging the board in gets you into ISP mode whatever the firmware above it does. It has to go in over the programming interface once, and from then on the device is recoverable without opening the case.
 
@@ -26,6 +24,15 @@ SMK ships [its own ISP bootloader](docs/bootloader.md), which takes that failure
 | E-YOOSO Z11 | SH68F90A / BYK901 | N/A | | [Details](docs/keyboards/eyooso-z11.md) |
 | Genesis Thor 300 | SH68F881 / BYK801 | N/A | | [Details](docs/keyboards/genesis-thor-300.md) |
 | CIY X77 | SH68F89 / BYK816 | N/A | External 24Cxx EEPROM | [Details](docs/keyboards/ciy-x77.md) |
+
+## Programming Tools
+
+| Tool | Hardware | Interface | Notes |
+| ---- | -------- | --------- | ----- |
+| [sinowisp](https://github.com/karstx/sinowisp) | None, just USB | ISP | Writes the application through the board's ISP bootloader (stock or SMK's). Cannot write to the bootloader region, so it can't recover a board whose bootloader is gone or unreachable. |
+| [sinodude](https://github.com/karstx/sinodude) + [sinodude-serial](https://github.com/karstx/sinodude/tree/main/firmware) | Arduino Nano (ATmega328P/PB) | ICP | Open source. Reads and writes the whole flash, including the bootloader. Used by the `*_full_flash` targets by default. |
+| [sinodude](https://github.com/karstx/sinodude) + SinoLink | SinoWealth SinoLink dongle | ICP | Same as above, through the vendor's dongle. Select it with `-Dicp_programmer=sinolink`. |
+| ProWriter + SinoLink | SinoWealth SinoLink dongle | ICP | SinoWealth's own Windows tool. Write `<board>_<layout>_full.hex` with it. |
 
 Also: [ISP bootloader](docs/bootloader.md). Platform notes: [SH68F90 / SH68F90A](docs/platforms/sh68f90.md), [SH68F881](docs/platforms/sh68f881.md), [SH68F89](docs/platforms/sh68f89.md).
 
@@ -67,9 +74,3 @@ cargo run --release --manifest-path tools/smk-console/Cargo.toml -- 258a:0016  #
 ```
 
 It picks devices up and drops them as they are plugged and unplugged, so it can be left running across a reflash. On Linux the `/dev/hidraw*` node needs a udev rule, or `sudo`.
-
-## Acknowledgements
-
-* [libfx2](https://github.com/whitequark/libfx2)
-* [LUFA](https://github.com/abcminiuser/lufa)
-* [QMK](https://github.com/qmk/qmk_firmware)
