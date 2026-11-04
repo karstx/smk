@@ -1,6 +1,7 @@
 #include "tick.h"
 #include "systick.h"
 #include "matrix.h"
+#include "dynamic_keymap.h"
 #include "indicators.h"
 #include "keyboard.h"
 #include "sleep.h"
@@ -43,6 +44,9 @@ static void run_led_subframe(void)
 
 void tick_dispatch(void)
 {
+#ifdef DYNAMIC_KEYMAP_ENABLE
+    dynamic_keymap_tick();
+#endif
     if (scan_due) {
         scan_due             = false;
         subframes_since_scan = 0;

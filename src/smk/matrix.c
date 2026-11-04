@@ -1,4 +1,5 @@
 #include "matrix.h"
+#include "dynamic_keymap.h"
 #include "report.h"
 #include "debug.h"
 #include "layout.h"
@@ -47,7 +48,7 @@ static uint16_t resolve_keycode(uint16_t base, uint8_t row, uint8_t col)
         return base;
     }
 
-    const uint16_t overlay = keymaps[action_layer][row][col];
+    const uint16_t overlay = keymap_get_keycode(action_layer, row, col);
     return (overlay == KC_TRANSPARENT) ? base : overlay;
 }
 
@@ -86,7 +87,7 @@ static void send_keycode(uint16_t qcode, bool pressed)
 
 static void process_key_state(uint8_t row, uint8_t col, bool pressed)
 {
-    const uint16_t base = keymaps[default_layer][row][col];
+    const uint16_t base = keymap_get_keycode(default_layer, row, col);
 
     if (IS_QK_MOMENTARY(base)) {
         if (pressed) {

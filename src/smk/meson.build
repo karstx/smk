@@ -13,3 +13,11 @@ src_smk += files(
     'sleep.c',
     'tick.c',
 )
+
+if get_option('via').enabled()
+    src_smk += files(
+        'dynamic_keymap.c',
+        'raw_hid.c',
+        'via.c',
+    )
+endif
