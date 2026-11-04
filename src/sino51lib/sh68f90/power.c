@@ -13,6 +13,9 @@
 
 static volatile uint8_t int4_woke;
 
+volatile uint8_t power_wake_int4_flags;
+volatile uint8_t power_wake_usbif1;
+
 static void usb_park(powerdown_mode_t mode)
 {
     if (mode == POWERDOWN_KEEP_USB_ALIVE) {
@@ -94,15 +97,18 @@ void power_enter_powerdown(powerdown_mode_t mode)
     wake_sources_arm(mode);
 
     watchdog_kick();
-    int4_woke = 0;
+    int4_woke             = 0;
+    power_wake_int4_flags = 0;
 
     halt_until_wake();
+    power_wake_usbif1 = USBIF1;
     clock_wake_restart();
     usb_resume(mode);
 }
 
 void int4_interrupt_handler(void) __interrupt(_INT_INT4)
 {
+    power_wake_int4_flags = EXF1;
     extint_wake_clear();
     int4_woke = 1;
 }
