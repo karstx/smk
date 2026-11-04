@@ -65,6 +65,11 @@ if get_option('sleep').enabled()
     cc_base_args += '-DSLEEP_ENABLE=1'
 endif
 
+if get_option('via').enabled()
+    cc_base_args += '-DVIA_ENABLE=1'
+    cc_base_args += '-DDYNAMIC_KEYMAP_ENABLE=1'
+endif
+
 if get_option('buildtype') == 'debug'
     cc_base_args += '-DDEBUG=1'
     cc_base_args += '--debug'  # emit SDCC .cdb for source-level tests (tests/sim.py)
@@ -168,9 +173,24 @@ foreach keyboard, board : keyboards
 
     if spec['settings_store'] == 'flash'
         settings_addr = marker_addr - spec['sector_size']
+        code_limit = settings_addr
+
+        if get_option('via').enabled()
+            dynamic_keymap_layers = options.get('dynamic_keymap_layers', '4').to_int()
+            dynamic_keymap_sectors = options.get('dynamic_keymap_sectors', '2').to_int()
+            dynamic_keymap_addr = settings_addr - dynamic_keymap_sectors * spec['sector_size']
+            code_limit = dynamic_keymap_addr
+            platform_cc_args += [
+                '-DDYNAMIC_KEYMAP_LAYER_COUNT=@0@'.format(dynamic_keymap_layers),
+                '-DDYNAMIC_KEYMAP_BASE=@0@u'.format(dynamic_keymap_addr),
+                '-DDYNAMIC_KEYMAP_SECTOR_COUNT=@0@u'.format(dynamic_keymap_sectors),
+                '-DDYNAMIC_KEYMAP_SECTOR_SIZE=@0@u'.format(spec['sector_size']),
+            ]
+        endif
+
         platform_cc_args += [
             '--code-size',
-            '@0@'.format(settings_addr),
+            '@0@'.format(code_limit),
             '-DFLASH_CFG_ADDR=@0@u'.format(settings_addr),
             '-DFLASH_CFG_SIZE=@0@u'.format(spec['sector_size']),
             '-DFLASH_MARKER_ADDR=@0@u'.format(marker_addr),

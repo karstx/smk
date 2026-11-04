@@ -11,6 +11,9 @@
 #include "console.h"
 #include "keyboard.h"
 #include "delay.h"
+#ifdef VIA_ENABLE
+#    include "raw_hid.h"
+#endif
 #include <stdint.h>
 #include <string.h>
 
@@ -193,6 +196,25 @@ const uint8_t hid_report_desc_extra[] = {
     HID_RI_END_COLLECTION(0),
 #endif // NKRO_ENABLE
 
+#ifdef VIA_ENABLE
+    HID_RI_USAGE_PAGE(16, 0xFF60),
+    HID_RI_USAGE(8, 0x61),
+    HID_RI_COLLECTION(8, 0x01),
+        HID_RI_USAGE(8, 0x62),
+        HID_RI_LOGICAL_MINIMUM(8, 0x00),
+        HID_RI_LOGICAL_MAXIMUM(16, 0x00FF),
+        HID_RI_REPORT_SIZE(8, 0x08),
+        HID_RI_REPORT_COUNT(8, RAW_HID_REPORT_SIZE),
+        HID_RI_INPUT(8, HID_IOF_DATA | HID_IOF_VARIABLE | HID_IOF_ABSOLUTE),
+        HID_RI_USAGE(8, 0x63),
+        HID_RI_LOGICAL_MINIMUM(8, 0x00),
+        HID_RI_LOGICAL_MAXIMUM(16, 0x00FF),
+        HID_RI_REPORT_SIZE(8, 0x08),
+        HID_RI_REPORT_COUNT(8, RAW_HID_REPORT_SIZE),
+        HID_RI_OUTPUT(8, HID_IOF_DATA | HID_IOF_VARIABLE | HID_IOF_ABSOLUTE | HID_IOF_NON_VOLATILE),
+    HID_RI_END_COLLECTION(0),
+#endif
+
     // clang-format on
 };
 
@@ -249,7 +271,11 @@ usb_desc_interface_c usb_desc_interface_extra = {
     .bDescriptorType    = USB_DESC_INTERFACE,
     .bInterfaceNumber   = 1,
     .bAlternateSetting  = 0,
+#ifdef VIA_ENABLE
+    .bNumEndpoints      = 2,
+#else
     .bNumEndpoints      = 1,
+#endif
     .bInterfaceClass    = USB_IFACE_CLASS_HID,
     .bInterfaceSubClass = USB_IFACE_SUBCLASS_NONE,
     .bInterfaceProtocol = USB_IFACE_PROTOCOL_BOOT,
@@ -271,9 +297,24 @@ usb_desc_endpoint_c usb_desc_endpoint_extra = {
     .bDescriptorType  = USB_DESC_ENDPOINT,
     .bEndpointAddress = 2 | USB_DIR_IN,
     .bmAttributes     = USB_XFER_INTERRUPT,
+#ifdef VIA_ENABLE
+    .wMaxPacketSize   = RAW_HID_REPORT_SIZE,
+#else
     .wMaxPacketSize   = 64, // 64 bytes
+#endif
     .bInterval        = 1,  // 1ms
 };
+
+#ifdef VIA_ENABLE
+usb_desc_endpoint_c usb_desc_endpoint_raw_out = {
+    .bLength          = sizeof(struct usb_desc_endpoint),
+    .bDescriptorType  = USB_DESC_ENDPOINT,
+    .bEndpointAddress = 2 | USB_DIR_OUT,
+    .bmAttributes     = USB_XFER_INTERRUPT,
+    .wMaxPacketSize   = RAW_HID_REPORT_SIZE,
+    .bInterval        = 1,
+};
+#endif
 
 usb_configuration_c usb_config = {
     {
@@ -292,6 +333,9 @@ usb_configuration_c usb_config = {
         {.interface = &usb_desc_interface_extra},
         {.hid = &usb_desc_hid_extra},
         {.endpoint = &usb_desc_endpoint_extra},
+#ifdef VIA_ENABLE
+        {.endpoint = &usb_desc_endpoint_raw_out},
+#endif
         {0},
     },
 };
@@ -405,6 +449,10 @@ void usb_init()
     enum_quiet_ticks = 0;
     enum_seen        = false;
 
+#ifdef VIA_ENABLE
+    raw_hid_init();
+#endif
+
     usb_hw_init();
 }
 
@@ -468,6 +516,9 @@ void usb_task(void)
     if (usb_isp_requested) {
         isp_jump();
     }
+#endif
+#ifdef VIA_ENABLE
+    raw_hid_task();
 #endif
 }
 
@@ -543,6 +594,13 @@ void usb_irq_dispatch(void)
 
     uint8_t if2 = USBIF2;
 
+#ifdef VIA_ENABLE
+    if (if2 & _OEP2IF) {
+        USBIF2 &= ~_OEP2IF;
+        raw_hid_receive_irq();
+    }
+#endif
+
     if (if2 & _OEP0IF) {
         USBIF2 &= ~_OEP0IF;
         usb_ep0_out_irq();
@@ -556,6 +614,9 @@ void usb_irq_dispatch(void)
     if (if2 & _IEP2IF) {
         USBIF2 &= ~_IEP2IF;
         usb_hw_ep2_in_complete();
+#ifdef VIA_ENABLE
+        raw_hid_in_complete();
+#endif
     }
 
     if (if2 & _IEP1IF) {

@@ -8,6 +8,7 @@
 #include "debug.h"
 #include "console.h"
 #include "matrix.h"
+#include "dynamic_keymap.h"
 #include "utils.h"
 #include "keyboard.h"
 #include "user_init.h"
@@ -41,6 +42,10 @@ void init(void)
     indicators_init();
 
     tick_init();
+
+#ifdef DYNAMIC_KEYMAP_ENABLE
+    dynamic_keymap_init();
+#endif
 
     EA = 1;
 }
@@ -102,6 +107,9 @@ void main(void)
         indicators_render();
 
         usb_task();
+#ifdef DYNAMIC_KEYMAP_ENABLE
+        dynamic_keymap_task();
+#endif
         settings_task();
         sleep_task();
 

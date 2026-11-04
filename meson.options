@@ -1,5 +1,11 @@
 option('nkro', type : 'feature', value : 'enabled', description : 'NKRO support')
 option(
+    'via',
+    type : 'feature',
+    value : 'disabled',
+    description : 'Enable VIA protocol and dynamic keymap over Raw HID',
+)
+option(
     'isp',
     type : 'feature',
     value : 'enabled',
