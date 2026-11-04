@@ -1,0 +1,84 @@
+#include "kbdef.h"
+#include "gpio.h"
+#include "user_init.h"
+#include "pwm.h"
+
+#define PWM_PERIOD 0x0100u
+
+void user_gpio_init(void)
+{
+    DRVCON = DRVCON_UNLOCK_P1;
+    P1DRV  = GPIO_DRIVE_25MA;
+    DRVCON = DRVCON_UNLOCK_P2;
+    P2DRV  = GPIO_DRIVE_25MA;
+    DRVCON = DRVCON_UNLOCK_P3;
+    P3DRV  = GPIO_DRIVE_25MA;
+    DRVCON = DRVCON_LOCK;
+
+    // Set the inactive level before enabling column output drivers.
+    GPIO_HIGH(4, KB_C_P4_MASK);
+    GPIO_HIGH(5, KB_C_P5_MASK);
+    GPIO_HIGH(6, KB_C_P6_MASK);
+    GPIO_OUTPUT(4, KB_C_P4_MASK);
+    GPIO_OUTPUT(5, KB_C_P5_MASK);
+    GPIO_OUTPUT(6, KB_C_P6_MASK);
+
+    GPIO_INPUT(5, KB_R_P5_MASK);
+    GPIO_INPUT(7, KB_R_P7_MASK);
+    GPIO_PULLUP_ON(5, KB_R_P5_MASK);
+    GPIO_PULLUP_ON(7, KB_R_P7_MASK);
+
+    /* Keep BK3632's VCC off until USB5V/host classification completes. */
+    GPIO_LOW(7, DC_DC_ENABLE_P7_6);
+    GPIO_OUTPUT(7, DC_DC_ENABLE_P7_6);
+    GPIO_INPUT(4, USB_POWER_SENSE_P4_4);
+    GPIO_PULLUP_OFF(4, USB_POWER_SENSE_P4_4);
+    GPIO_INPUT(7, CHARGE_STATUS_P7_7);
+    GPIO_PULLUP_ON(7, CHARGE_STATUS_P7_7);
+
+    GPIO_LOW(1, VDR_P1_MASK);
+    GPIO_LOW(2, VDR_P2_MASK);
+    GPIO_LOW(3, VDR_P3_MASK);
+    GPIO_OUTPUT(1, VDR_P1_MASK);
+    GPIO_OUTPUT(2, VDR_P2_MASK);
+    GPIO_OUTPUT(3, VDR_P3_MASK);
+}
+
+#ifndef BOOT_CHORD_HEADER
+void user_pwm_init(void)
+{
+    PWM0PERDH = (uint8_t)(PWM_PERIOD >> 8);
+    PWM0PERDL = (uint8_t)PWM_PERIOD;
+    PWM1PERDH = (uint8_t)(PWM_PERIOD >> 8);
+    PWM1PERDL = (uint8_t)PWM_PERIOD;
+    PWM2PERDH = (uint8_t)(PWM_PERIOD >> 8);
+    PWM2PERDL = (uint8_t)PWM_PERIOD;
+
+    SET_PWM_DUTY(LED_PWM_R0, 0, PWM_PERIOD);
+    SET_PWM_DUTY(LED_PWM_G0, 0, PWM_PERIOD);
+    SET_PWM_DUTY(LED_PWM_B0, 0, PWM_PERIOD);
+    SET_PWM_DUTY(LED_PWM_R1, 0, PWM_PERIOD);
+    SET_PWM_DUTY(LED_PWM_G1, 0, PWM_PERIOD);
+    SET_PWM_DUTY(LED_PWM_B1, 0, PWM_PERIOD);
+    SET_PWM_DUTY(LED_PWM_R2, 0, PWM_PERIOD);
+    SET_PWM_DUTY(LED_PWM_G2, 0, PWM_PERIOD);
+    SET_PWM_DUTY(LED_PWM_B2, 0, PWM_PERIOD);
+    SET_PWM_DUTY(LED_PWM_R3, 0, PWM_PERIOD);
+    SET_PWM_DUTY(LED_PWM_G3, 0, PWM_PERIOD);
+    SET_PWM_DUTY(LED_PWM_B3, 0, PWM_PERIOD);
+    SET_PWM_DUTY(LED_PWM_R4, 0, PWM_PERIOD);
+    SET_PWM_DUTY(LED_PWM_G4, 0, PWM_PERIOD);
+    SET_PWM_DUTY(LED_PWM_B4, 0, PWM_PERIOD);
+    SET_PWM_DUTY(LED_PWM_R5, 0, PWM_PERIOD);
+    SET_PWM_DUTY(LED_PWM_G5, 0, PWM_PERIOD);
+    SET_PWM_DUTY(LED_PWM_B5, 0, PWM_PERIOD);
+}
+#endif
+
+void user_init(void)
+{
+    user_gpio_init();
+#ifndef BOOT_CHORD_HEADER
+    user_pwm_init();
+#endif
+}
