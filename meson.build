@@ -22,6 +22,7 @@ platforms = {}
 wireless_modules = {}
 nvm_modules = {}
 keyboards = {}
+mice = {}
 
 subdir('src')
 
@@ -491,6 +492,91 @@ foreach keyboard, board : keyboards
 
         message('target available: @0@, flash: @1@'.format(hex_smk_target_name, flash_target_name))
     endforeach
+endforeach
+
+# Mice: standalone sino51lib applications (see src/mice), written through the
+# stock ISP bootloader by sinowisp using the device's own VID:PID.
+igm3000_verify = files('tools/igm3000/verify.py')
+
+foreach mouse_name, mouse : mice
+    spec = platforms[mouse['platform']]
+
+    mouse_args = cc_model_args + [
+        '--xram-size',
+        '@0@'.format(spec['xram_size']),
+        '-DFREQ_SYS=@0@'.format(spec['freq_sys']),
+        '--code-size',
+        '@0@'.format(spec['flash_size'] - spec['bootloader_size'] - spec['sector_size']),
+        '-DWATCHDOG_ENABLE=1',
+    ]
+
+    mouse_incs = ['-I' + mouse['dir'], '-I' + dir_base, '-I' + spec['dir'], '-I' + dir_base / 'src/sino51lib']
+
+    mouse_prefix = '@0@_'.format(mouse_name)
+
+    mouse_compiler = generator(
+        py,
+        output : '@BASENAME@.rel',
+        depfile : '@BASENAME@.d',
+        arguments : [sdcc_compile, '@DEPFILE@', cc.full_path()] + mouse_args + mouse_incs + ['-c', '@INPUT@', '-o', '@OUTPUT@'],
+    )
+
+    mouse_rel = mouse_compiler.process(
+        mouse['src'] + src_startup + src_delay + src_ldo + src_isp + spec['example_core'] + spec['example_usbhw'],
+    )
+
+    mouse_ihx = custom_target(
+        mouse_prefix + 'smk.ihx',
+        input : mouse_rel,
+        output : mouse_prefix + 'smk.ihx',
+        command : [cc, mouse_args, '-o', '@OUTPUT@', '@INPUT@'],
+    )
+
+    mouse_hex = custom_target(
+        mouse_prefix + 'smk.hex',
+        input : mouse_ihx,
+        output : mouse_prefix + 'smk.hex',
+        capture : true,
+        install : true,
+        install_dir : 'firmware',
+        command : [packihx, '@INPUT@'],
+    )
+
+    # --force: the image is smaller than the application region and gets zero-padded
+    run_target(
+        mouse_prefix + 'flash',
+        command : [
+            sinowisp,
+            'write',
+            '-p',
+            mouse['platform'],
+            '--vendor_id',
+            mouse['vendor_id'],
+            '--product_id',
+            mouse['product_id'],
+            '--force',
+            mouse_hex.full_path(),
+        ],
+        depends : mouse_hex,
+    )
+
+    if mouse_name == 'isy-igm3000'
+        # Emulator-based pre-flash checks (tools/igm3000): safety paths, USB, sensors.
+        test(
+            mouse_prefix + 'verify',
+            py,
+            args : [
+                igm3000_verify,
+                mouse_ihx.full_path(),
+                meson.current_build_dir() / mouse_prefix + 'smk.map',
+                '--quick',
+            ],
+            depends : mouse_ihx,
+            timeout : 600,
+        )
+    endif
+
+    message('target available: @0@smk.hex, flash: @0@flash'.format(mouse_prefix))
 endforeach
 
 example_hexes = []

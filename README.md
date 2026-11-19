@@ -25,6 +25,10 @@ SMK ships [its own ISP bootloader](docs/bootloader.md), which takes that failure
 | Genesis Thor 300 | SH68F881 / BYK801 | N/A | | [Details](docs/keyboards/genesis-thor-300.md) |
 | CIY X77 | SH68F89 / BYK816 | N/A | External 24Cxx EEPROM | [Details](docs/keyboards/ciy-x77.md) |
 
+| Mouse | MCU | Wireless | Extra | Details |
+| ----- | --- | -------- | ----- | ------- |
+| ISY IGM3000 | SH68F881 | N/A | Four sensor variants, RGB, DPI LEDs | [Details](docs/mice/isy-igm3000.md) |
+
 ## Programming Tools
 
 | Tool | Hardware | Interface | Notes |
